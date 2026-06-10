@@ -26,10 +26,10 @@ REQUEST_TIMEOUT = 15  # seconds
 # ── Database ─────────────────────────────────────────────────────────────────
 
 DB_CONFIG = {
-    "host": os.getenv("SPORTTERY_DB_HOST", "121.4.61.160"),
+    "host": os.getenv("SPORTTERY_DB_HOST", "127.0.0.1"),
     "port": int(os.getenv("SPORTTERY_DB_PORT", "3306")),
-    "user": os.getenv("SPORTTERY_DB_USER", "football"),
-    "password": os.getenv("SPORTTERY_DB_PASSWORD", "eiXceA7455CzDbae"),
+    "user": os.getenv("SPORTTERY_DB_USER", "root"),
+    "password": os.getenv("SPORTTERY_DB_PASSWORD", ""),
     "database": os.getenv("SPORTTERY_DB_NAME", "football"),
     "charset": "utf8mb4",
 }
