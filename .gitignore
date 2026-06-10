@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database
+data/sporttery.db
+data/*.db
+
+# Generated data (regenerable)
+data/packages/
+data/*.txt
+data/*.json
+!data/.gitkeep
+
+# Old sample files in root
+api_*.json
+sporttery_response.json
+odds_sample.txt
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude
+.claude/
