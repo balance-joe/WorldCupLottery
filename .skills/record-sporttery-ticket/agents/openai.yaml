@@ -1,0 +1,4 @@
+interface:
+  display_name: "记录竞彩足球票"
+  short_description: "把确认购买的竞彩足球方案写入项目 SQLite 资金台账。"
+  default_prompt: "记录这张竞彩足球票到 SQLite 台账："

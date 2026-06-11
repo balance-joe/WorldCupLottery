@@ -202,5 +202,76 @@ class ApiErrorLogTest(_DBTestBase):
         self.assertEqual(row["retry_count"], 0)
 
 
+class BettingLedgerTest(_DBTestBase):
+    def test_save_manual_betting_ticket_with_selections(self):
+        db_mod.save_sp_snapshots(self.conn, [{
+            "match_id": "2040162",
+            "snapshot_time": "2026-06-11 12:25:32",
+            "play_type": "had",
+            "option_code": "H",
+            "option_name": "主胜",
+            "sp_value": 1.26,
+            "is_single": 1,
+        }])
+        sp_row = self.conn.execute(
+            "SELECT id FROM sporttery_sp_snapshot WHERE match_id = ?",
+            ("2040162",),
+        ).fetchone()
+
+        ticket_id = db_mod.save_betting_ticket(self.conn, {
+            "bet_group": "plan-1",
+            "ticket_label": "墨西哥胜 × 美国胜",
+            "pass_type": "2x1",
+            "stake_amount": 20,
+            "unit_stake": 2,
+            "multiplier": 10,
+            "expected_min_payout": 45.36,
+            "expected_max_payout": 45.36,
+            "placed_at": "2026-06-11 15:00:00",
+            "selections": [
+                {
+                    "match_id": "2040162",
+                    "match_num": "周四001",
+                    "play_type": "had",
+                    "option_code": "H",
+                    "option_name": "主胜",
+                    "selected_sp": 1.26,
+                    "sp_snapshot_time": "2026-06-11 12:25:32",
+                },
+                {
+                    "match_id": "2040165",
+                    "match_num": "周五004",
+                    "play_type": "had",
+                    "option_code": "H",
+                    "option_name": "主胜",
+                    "selected_sp": 1.8,
+                    "sp_snapshot_time": "2026-06-11 10:26:17",
+                },
+            ],
+        })
+
+        self.assertGreater(ticket_id, 0)
+        tickets = db_mod.fetch_betting_tickets(self.conn, "plan-1")
+        self.assertEqual(len(tickets), 1)
+        self.assertEqual(tickets[0]["ticket_status"], "pending")
+        self.assertEqual(tickets[0]["expected_max_payout"], 45.36)
+
+        selection_count = self.conn.execute(
+            "SELECT COUNT(*) FROM betting_ticket_selection WHERE ticket_id = ?",
+            (ticket_id,),
+        ).fetchone()[0]
+        self.assertEqual(selection_count, 2)
+
+        linked_selection = self.conn.execute(
+            """
+            SELECT sp_snapshot_id
+            FROM betting_ticket_selection
+            WHERE ticket_id = ? AND match_id = ? AND option_code = ?
+            """,
+            (ticket_id, "2040162", "H"),
+        ).fetchone()
+        self.assertEqual(linked_selection["sp_snapshot_id"], sp_row["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

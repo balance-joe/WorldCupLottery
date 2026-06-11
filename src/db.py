@@ -131,6 +131,53 @@ CREATE TABLE IF NOT EXISTS sporttery_market_analysis (
 """
 
 
+DDL_BETTING_TICKET = """
+CREATE TABLE IF NOT EXISTS betting_ticket (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bet_group TEXT NULL,
+    ticket_label TEXT NOT NULL,
+    pass_type TEXT NOT NULL,
+    stake_amount REAL NOT NULL,
+    unit_stake REAL DEFAULT 2,
+    multiplier INTEGER DEFAULT 1,
+    ticket_status TEXT NOT NULL DEFAULT 'pending',
+    expected_min_payout REAL NULL,
+    expected_max_payout REAL NULL,
+    actual_payout REAL NULL,
+    profit_loss REAL NULL,
+    placed_at TEXT NOT NULL,
+    settled_at TEXT NULL,
+    notes TEXT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+"""
+
+
+DDL_BETTING_TICKET_SELECTION = """
+CREATE TABLE IF NOT EXISTS betting_ticket_selection (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL,
+    leg_index INTEGER NOT NULL,
+    match_id TEXT NOT NULL,
+    match_num TEXT NULL,
+    play_type TEXT NOT NULL,
+    option_code TEXT NOT NULL,
+    option_name TEXT NULL,
+    goal_line TEXT NULL,
+    selected_sp REAL NOT NULL,
+    sp_snapshot_id INTEGER NULL,
+    sp_snapshot_time TEXT NULL,
+    result_status TEXT NOT NULL DEFAULT 'pending',
+    actual_result TEXT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY(ticket_id) REFERENCES betting_ticket(id),
+    FOREIGN KEY(sp_snapshot_id) REFERENCES sporttery_sp_snapshot(id),
+    UNIQUE(ticket_id, leg_index, match_id, play_type, option_code)
+);
+"""
+
+
 # Connection
 
 class Connection:
@@ -182,8 +229,11 @@ def ensure_tables(conn: Connection | None = None) -> None:
         conn.execute(DDL_SIGNAL)
         conn.execute(DDL_API_ERROR)
         conn.execute(DDL_MARKET_ANALYSIS)
+        conn.execute(DDL_BETTING_TICKET)
+        conn.execute(DDL_BETTING_TICKET_SELECTION)
         _ensure_match_result_columns(conn)
         _ensure_raw_snapshot_version_column(conn)
+        _ensure_betting_selection_columns(conn)
         conn.commit()
     finally:
         if close:
@@ -542,6 +592,112 @@ def save_market_analysis(conn: Connection, analysis: dict) -> None:
     conn.commit()
 
 
+def save_betting_ticket(conn: Connection, ticket: dict) -> int:
+    """Save one manual betting ticket and its selections.
+
+    This is a financial ledger for manual decisions, not a Sporttery raw-data
+    table. Keep original SP snapshots in sporttery_sp_snapshot.
+    """
+    selections = ticket.get("selections") or []
+    if not selections:
+        raise ValueError("ticket selections are required")
+
+    placed_at = ticket.get("placed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur = conn.execute(
+        """
+        INSERT INTO betting_ticket
+            (bet_group, ticket_label, pass_type, stake_amount, unit_stake,
+             multiplier, ticket_status, expected_min_payout, expected_max_payout,
+             actual_payout, profit_loss, placed_at, settled_at, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ticket.get("bet_group"),
+            ticket["ticket_label"],
+            ticket["pass_type"],
+            ticket["stake_amount"],
+            ticket.get("unit_stake", 2),
+            ticket.get("multiplier", 1),
+            ticket.get("ticket_status", "pending"),
+            ticket.get("expected_min_payout"),
+            ticket.get("expected_max_payout"),
+            ticket.get("actual_payout"),
+            ticket.get("profit_loss"),
+            placed_at,
+            ticket.get("settled_at"),
+            ticket.get("notes"),
+        ),
+    )
+    ticket_id = int(cur.lastrowid)
+
+    for index, selection in enumerate(selections, start=1):
+        sp_snapshot_id = selection.get("sp_snapshot_id")
+        if sp_snapshot_id is None:
+            sp_snapshot_id = find_sp_snapshot_id(conn, selection)
+        conn.execute(
+            """
+            INSERT INTO betting_ticket_selection
+                (ticket_id, leg_index, match_id, match_num, play_type,
+                 option_code, option_name, goal_line, selected_sp,
+                 sp_snapshot_id, sp_snapshot_time, result_status, actual_result)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ticket_id,
+                selection.get("leg_index", index),
+                str(selection["match_id"]),
+                selection.get("match_num"),
+                selection["play_type"],
+                selection["option_code"],
+                selection.get("option_name"),
+                selection.get("goal_line"),
+                selection["selected_sp"],
+                sp_snapshot_id,
+                selection.get("sp_snapshot_time"),
+                selection.get("result_status", "pending"),
+                selection.get("actual_result"),
+            ),
+        )
+    conn.commit()
+    return ticket_id
+
+
+def find_sp_snapshot_id(conn: Connection, selection: dict) -> int | None:
+    """Find the stored SP snapshot row matching a betting selection."""
+    params = [
+        str(selection["match_id"]),
+        selection["play_type"],
+        selection["option_code"],
+    ]
+    sql = """
+        SELECT id
+        FROM sporttery_sp_snapshot
+        WHERE match_id = ?
+          AND play_type = ?
+          AND option_code = ?
+    """
+    if selection.get("sp_snapshot_time"):
+        sql += " AND snapshot_time = ?"
+        params.append(selection["sp_snapshot_time"])
+    if selection.get("goal_line") is not None:
+        sql += " AND goal_line = ?"
+        params.append(selection["goal_line"])
+    sql += " ORDER BY snapshot_time DESC, id DESC LIMIT 1"
+    row = conn.execute(sql, tuple(params)).fetchone()
+    return int(row["id"]) if row else None
+
+
+def fetch_betting_tickets(conn: Connection, bet_group: str | None = None) -> list[dict]:
+    """Fetch saved manual betting tickets, optionally for one group."""
+    sql = "SELECT * FROM betting_ticket"
+    params: tuple[str, ...] = ()
+    if bet_group is not None:
+        sql += " WHERE bet_group = ?"
+        params = (bet_group,)
+    sql += " ORDER BY placed_at, id"
+    return _fetch_dicts(conn.execute(sql, params))
+
+
 def _fetch_dicts(cur) -> list[dict]:
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -572,6 +728,15 @@ def _ensure_raw_snapshot_version_column(conn: Connection) -> None:
     }
     if "response_version" not in existing:
         conn.execute("ALTER TABLE sporttery_raw_snapshot ADD COLUMN response_version INTEGER DEFAULT 1")
+
+
+def _ensure_betting_selection_columns(conn: Connection) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(betting_ticket_selection)").fetchall()
+    }
+    if "sp_snapshot_id" not in existing:
+        conn.execute("ALTER TABLE betting_ticket_selection ADD COLUMN sp_snapshot_id INTEGER NULL")
 
 
 _sp_hash_column_checked = False
