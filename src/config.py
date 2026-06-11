@@ -1,6 +1,4 @@
-"""Sporttery API and database configuration."""
-
-import os
+"""Sporttery API configuration."""
 
 # ── API ──────────────────────────────────────────────────────────────────────
 
@@ -22,17 +20,6 @@ SPORTTERY_HEADERS = {
 }
 
 REQUEST_TIMEOUT = 15  # seconds
-
-# ── Database ─────────────────────────────────────────────────────────────────
-
-DB_CONFIG = {
-    "host": os.getenv("SPORTTERY_DB_HOST", "127.0.0.1"),
-    "port": int(os.getenv("SPORTTERY_DB_PORT", "3306")),
-    "user": os.getenv("SPORTTERY_DB_USER", "root"),
-    "password": os.getenv("SPORTTERY_DB_PASSWORD", ""),
-    "database": os.getenv("SPORTTERY_DB_NAME", "football"),
-    "charset": "utf8mb4",
-}
 
 # ── Play types ───────────────────────────────────────────────────────────────
 

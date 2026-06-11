@@ -17,7 +17,7 @@
 ### 环境
 
 - Python 3.11+
-- requests, PyMySQL
+- requests
 
 ### 安装
 
@@ -34,8 +34,12 @@ python -m scripts.fetch_sporttery --mode today
 # 抓取单场比赛
 python -m scripts.fetch_sporttery --mode match --match-id 2040162
 
-# 使用 MySQL
-python -m scripts.fetch_sporttery --mode today --backend mysql
+# 每 5 分钟抓一次，抓 12 轮
+python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 12
+
+# 每 5 分钟一直抓，Ctrl+C 停止
+python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 0
+
 ```
 
 ### 生成 LLM 分析包
@@ -45,6 +49,57 @@ python -m scripts.build_llm_package --match-id 2040162
 ```
 
 输出到 `data/packages/2040162.json`。
+
+### 校验胜平负手工票
+
+项目只做合法性校验，不自动下单。当前出票规则范围限定为 `had` 胜平负。
+
+```python
+from src.tickets import (
+    build_ticket,
+    make_had_selection,
+    make_had_selection_from_sp_records,
+    quote_ticket_with_latest_sp,
+)
+
+# 单关：必须是 1 场，并且该场 had 的 is_single=True
+single = build_ticket(
+    [make_had_selection("2040162", ["H"], is_single=True, match_status="1")],
+    "single",
+)
+
+# 2 串 1：必须是 2 场不同比赛
+parlay = build_ticket(
+    [
+        make_had_selection("2040162", ["H", "D"], match_status="1"),
+        make_had_selection("2040163", ["A"], match_status="1"),
+    ],
+    "2x1",
+    multiplier=2,
+)
+
+print(single.amount, parlay.amount)
+```
+
+如果已经从 `sporttery_sp_snapshot` 查出了 HAD SP 行，也可以直接用记录里的 `is_single`：
+
+```python
+selection = make_had_selection_from_sp_records(
+    "2040162",
+    ["H"],
+    sp_records,
+    match_status="1",
+)
+ticket = build_ticket([selection], "single")
+```
+
+出票前必须用最新 SP 重新报价：
+
+```python
+quote = quote_ticket_with_latest_sp(ticket, latest_sp_records)
+print(quote.option_sp)
+print(quote.min_potential_payout, quote.max_potential_payout)
+```
 
 ---
 
@@ -61,11 +116,12 @@ football/
 │   ├── api_client.py            # HTTP 请求封装
 │   ├── parsers.py               # 解析 API 响应
 │   ├── probability.py           # 隐含概率计算
-│   ├── db.py                    # SQLite/MySQL 双后端
-│   └── llm_package.py           # LLM 分析包生成器
-├── db/
-│   └── schema.sql               # MySQL DDL
+│   ├── sp_movement.py           # SP 变化计算
+│   ├── db.py                    # SQLite 数据库
+│   ├── llm_package.py           # LLM 分析包生成器
+│   └── tickets.py               # 胜平负手工票合法性校验
 ├── data/                        # SQLite 数据库 + 导出文件
+├── tests/                       # 单元测试
 ├── requirements.txt
 └── README.md
 ```
@@ -84,17 +140,7 @@ football/
 
 ### 连接方式
 
-**SQLite（默认）：** 数据文件在 `data/sporttery.db`，零配置。
-
-**MySQL：** 设置环境变量或修改 `src/config.py`：
-
-```bash
-export SPORTTERY_DB_HOST=127.0.0.1
-export SPORTTERY_DB_PORT=3306
-export SPORTTERY_DB_USER=football
-export SPORTTERY_DB_PASSWORD=xxx
-export SPORTTERY_DB_NAME=football
-```
+只使用 SQLite。数据文件在 `data/sporttery.db`，零配置。
 
 ---
 
@@ -134,6 +180,42 @@ prob_sum          = sum(implied_prob_raw)  # 同一 match_id + play_type + snaps
 implied_prob_norm = implied_prob_raw / prob_sum
 ```
 
+### 定时更新与 SP 变化
+
+定时更新直接重复运行抓取入口。每次抓取会保留原始 API 快照，并把每个玩法选项写入 `sporttery_sp_snapshot`。同一 `match_id + snapshot_time + play_type + option_code` 会去重，新的 `snapshot_time` 会形成时间序列。
+
+```bash
+python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 0
+```
+
+程序内计算 SP 变化：
+
+```python
+from src import db
+from src.sp_movement import calculate_sp_movements
+
+conn = db.get_connection()
+history = db.fetch_sp_history(conn, ["2040162"], play_type="had")
+movements = calculate_sp_movements(history)
+```
+
+变化指标包含：
+
+- `change_from_first`：首笔 SP 到最新 SP 的变化。
+- `change_pct_from_first`：首笔到最新的比例变化。
+- `change_from_previous`：上一笔 SP 到最新 SP 的变化。
+- `change_pct_from_previous`：上一笔到最新的比例变化。
+- `direction_from_first` / `direction_from_previous`：`up`、`down`、`flat`。
+
+出票前重新计算：
+
+```python
+latest = db.fetch_latest_sp_snapshots(conn, ["2040162"], play_type="had")
+quote = quote_ticket_with_latest_sp(ticket, latest)
+```
+
+注意：这里的报价只是基于本地最新快照重新计算。最终中奖奖金仍以体彩出票成功时的 SP 为准。
+
 ### 返还率参考
 
 由 SP 倒数和反推的理论返还率近似值，不等同于官方返奖比例。
@@ -153,6 +235,21 @@ implied_prob_norm = implied_prob_raw / prob_sum
 | ttg | 总进球 | 0 / 1 / 2 / 3 / 4 / 5 / 6 / 7 |
 | crs | 比分 | s01s00 等（后续） |
 | hafu | 半全场 | hh / hd / ha 等（后续） |
+
+---
+
+## 胜平负出票规则校验
+
+当前项目只支持 `had` 胜平负手工票校验：
+
+- 只允许 `had`，选项只允许 `H`、`D`、`A`。
+- `match_status` 必须为 `"1"`，否则不能形成购票动作。
+- 单关 `pass_type="single"`：只能包含 1 场比赛，且该场 API 返回的 `is_single` 必须为 `True`。
+- 可以用 `make_had_selection_from_sp_records()` 从 HAD SP 行里推导 `is_single`，避免手工填错单关限制。
+- 串关只支持 `N串1`，代码里写作 `Nx1`，例如 `2x1`、`3x1`。
+- 串关至少 2 场，`N` 必须等于选择的比赛场数。
+- 同一张票里同一场比赛只能出现一次，避免同场不同玩法或重复选择混入串关。
+- 金额按 `注数 * 2元 * 倍数` 计算；复式选项会增加注数，例如 1 场选 `H/D`、另一场选 `A`，`2x1` 为 2 注。
 
 ---
 
@@ -263,8 +360,10 @@ implied_prob_norm = implied_prob_raw / prob_sum
 ✅ 3. match 入库
 ✅ 4. had/hhad/ttg SP 入库
 ✅ 5. 隐含概率计算
-⬜ 6. 定时快照
-⬜ 7. SP 变化指标
+✅ 5.1 胜平负手工票合法性校验
+✅ 5.2 出票前按最新 SP 重新报价
+✅ 6. 定时快照
+✅ 7. SP 变化指标
 ⬜ 8. 信号识别
 ✅ 9. LLM match package（v2）
 ⬜ 10. LLM 分析报告

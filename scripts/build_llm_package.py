@@ -4,7 +4,6 @@ Build LLM analysis package for a match.
 Usage:
     python -m scripts.build_llm_package --match-id 2040162
     python -m scripts.build_llm_package --match-id 2040162 --with-detail
-    python -m scripts.build_llm_package --match-id 2040162 --backend mysql
 """
 
 from __future__ import annotations
@@ -18,14 +17,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src import db
-from src.llm_package import build_llm_package
-
 
 def main():
     parser = argparse.ArgumentParser(description="Build LLM analysis package")
     parser.add_argument("--match-id", required=True, help="比赛 match_id")
-    parser.add_argument("--backend", choices=["sqlite", "mysql"], default="sqlite")
     parser.add_argument("--with-detail", action="store_true",
                         help="包含对阵详情（需先手动获取 detail JSON）")
     parser.add_argument("--detail-path", type=str,
@@ -33,14 +28,15 @@ def main():
     parser.add_argument("--output", type=str, help="输出路径（默认 data/packages/{id}.json）")
     args = parser.parse_args()
 
-    db.set_backend(args.backend)
+    from src import db
+    from src.llm_package import build_llm_package
+
     conn = db.get_connection()
 
     try:
         # ── Match info ───────────────────────────────────────────────────
         cur = conn.execute(
-            "SELECT * FROM sporttery_match WHERE match_id = ?" if args.backend == "sqlite"
-            else "SELECT * FROM sporttery_match WHERE match_id = %s",
+            "SELECT * FROM sporttery_match WHERE match_id = ?",
             (args.match_id,),
         )
         row = cur.fetchone()
@@ -53,9 +49,7 @@ def main():
 
         # ── SP history ───────────────────────────────────────────────────
         cur = conn.execute(
-            "SELECT * FROM sporttery_sp_snapshot WHERE match_id = ? ORDER BY snapshot_time"
-            if args.backend == "sqlite"
-            else "SELECT * FROM sporttery_sp_snapshot WHERE match_id = %s ORDER BY snapshot_time",
+            "SELECT * FROM sporttery_sp_snapshot WHERE match_id = ? ORDER BY snapshot_time",
             (args.match_id,),
         )
         sp_cols = [d[0] for d in cur.description]

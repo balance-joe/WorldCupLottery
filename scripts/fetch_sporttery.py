@@ -5,12 +5,12 @@ Usage:
     python -m scripts.fetch_sporttery --mode today
     python -m scripts.fetch_sporttery --mode match --match-id 2040162
     python -m scripts.fetch_sporttery --mode all
+    python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 12
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from datetime import datetime
@@ -21,7 +21,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src import api_client, parsers, probability, db
+api_client = None
+parsers = None
+probability = None
+db = None
 
 
 # ── Stats collector ──────────────────────────────────────────────────────────
@@ -177,44 +180,75 @@ def run_today(conn, stats: Stats) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    global api_client, parsers, probability, db
+
     parser = argparse.ArgumentParser(description="Sporttery data fetcher")
     parser.add_argument("--mode", choices=["today", "match", "all"], default="today",
                         help="today=抓关注列表+SP, match=单场SP, all=同today")
     parser.add_argument("--match-id", type=str, help="单场模式的 matchId")
-    parser.add_argument("--backend", choices=["sqlite", "mysql"], default="sqlite",
-                        help="数据库后端 (默认 sqlite)")
+    parser.add_argument("--interval-seconds", type=int, default=0,
+                        help="定时抓取间隔秒数；0 表示只抓一次")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="抓取轮数；0 表示一直循环，需配合 --interval-seconds")
     args = parser.parse_args()
 
     if args.mode == "match" and not args.match_id:
         print("错误: --mode match 需要 --match-id 参数")
         sys.exit(1)
+    if args.interval_seconds < 0:
+        print("错误: --interval-seconds 不能为负数")
+        sys.exit(1)
+    if args.repeat < 0:
+        print("错误: --repeat 不能为负数")
+        sys.exit(1)
+    if args.repeat == 0 and args.interval_seconds <= 0:
+        print("错误: --repeat 0 需要设置 --interval-seconds")
+        sys.exit(1)
 
-    db.set_backend(args.backend)
-    stats = Stats()
+    from src import api_client as _api_client
+    from src import db as _db
+    from src import parsers as _parsers
+    from src import probability as _probability
+
+    api_client = _api_client
+    parsers = _parsers
+    probability = _probability
+    db = _db
 
     # Connect to DB
     try:
         conn = db.get_connection()
-        if args.backend == "sqlite":
-            print(f"已连接 SQLite: {db._SQLITE_PATH}")
-        else:
-            print(f"已连接 MySQL: {db.DB_CONFIG['host']}:{db.DB_CONFIG['port']}/{db.DB_CONFIG['database']}")
+        print(f"已连接 SQLite: {db._SQLITE_PATH}")
     except Exception as e:
         print(f"数据库连接失败: {e}")
         sys.exit(1)
 
     try:
         db.ensure_tables(conn)
+        cycle = 0
+        while args.repeat == 0 or cycle < args.repeat:
+            cycle += 1
+            if args.repeat != 1 or args.interval_seconds:
+                repeat_text = "∞" if args.repeat == 0 else str(args.repeat)
+                print(f"\n轮询抓取 {cycle}/{repeat_text}  {datetime.now():%Y-%m-%d %H:%M:%S}")
 
-        if args.mode == "match":
-            stats.api_calls += 1
-            run_match(args.match_id, conn, stats)
-        else:
-            run_today(conn, stats)
+            stats = Stats()
+            if args.mode == "match":
+                run_match(args.match_id, conn, stats)
+            else:
+                run_today(conn, stats)
+            stats.report()
+
+            if args.repeat != 0 and cycle >= args.repeat:
+                break
+            if args.interval_seconds <= 0:
+                break
+            print(f"等待 {args.interval_seconds}s 后继续抓取...")
+            time.sleep(args.interval_seconds)
+    except KeyboardInterrupt:
+        print("\n已停止定时抓取")
     finally:
         conn.close()
-
-    stats.report()
 
 
 if __name__ == "__main__":
