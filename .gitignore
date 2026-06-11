@@ -1,44 +1,62 @@
 # Environment
 .env
+.env.*
+!.env.example
 
-# Python
+# Python caches
 __pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-.eggs/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Virtual env
+# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# IDE
+# Build and package outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Local databases
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/sporttery.db
+
+# Generated data
+data/packages/
+data/*.json
+data/*.txt
+!data/.gitkeep
+
+# Logs and runtime files
+*.log
+logs/
+tmp/
+temp/
+
+# Local editor and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Database
-data/sporttery.db
-data/*.db
-
-# Generated data (regenerable)
-data/packages/
-data/*.txt
-data/*.json
-!data/.gitkeep
-
-# Old sample files in root
-api_*.json
-sporttery_response.json
-odds_sample.txt
-
-# OS
 Thumbs.db
 .DS_Store
 
-# Claude
+# Local agent/tool state
 .claude/
+.codex/
+.agents/
+
+# Raw API samples kept outside data/
+api_*.json
+sporttery_response.json
+odds_sample.txt
