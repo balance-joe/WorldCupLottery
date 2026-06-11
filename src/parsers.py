@@ -5,6 +5,66 @@ from __future__ import annotations
 from datetime import datetime
 
 
+# ── Schema validation ─────────────────────────────────────────────────────────
+
+_MATCH_REQUIRED_TOP = {"value"}
+_MATCH_REQUIRED_VALUE = {"matchInfoList"}
+_MATCH_REQUIRED_SUB = {
+    "matchId", "matchDate", "matchTime",
+    "homeTeamAbbName", "awayTeamAbbName",
+}
+
+_FIXED_BONUS_REQUIRED_TOP = {"value"}
+_FIXED_BONUS_REQUIRED_VALUE = {"oddsHistory"}
+
+
+def validate_match_list_schema(raw: dict) -> list[str]:
+    """Check top-level structure of a matchList response.
+
+    Returns a list of human-readable warnings; empty means valid.
+    """
+    warnings: list[str] = []
+    for key in _MATCH_REQUIRED_TOP:
+        if key not in raw:
+            warnings.append(f"matchList: missing top-level key '{key}'")
+            return warnings  # can't go deeper
+
+    value = raw["value"]
+    for key in _MATCH_REQUIRED_VALUE:
+        if key not in value:
+            warnings.append(f"matchList.value: missing key '{key}'")
+
+    for day in value.get("matchInfoList", []):
+        for m in day.get("subMatchList", []):
+            for key in _MATCH_REQUIRED_SUB:
+                if key not in m:
+                    warnings.append(f"matchList.subMatch item: missing '{key}'")
+                    break  # one warning per match is enough
+            break  # only validate first match to avoid flooding
+        break
+
+    return warnings
+
+
+def validate_fixed_bonus_schema(raw: dict, match_id: str | int) -> list[str]:
+    """Check top-level structure of a fixedBonus response.
+
+    Returns a list of human-readable warnings; empty means valid.
+    """
+    warnings: list[str] = []
+    for key in _FIXED_BONUS_REQUIRED_TOP:
+        if key not in raw:
+            warnings.append(f"fixedBonus({match_id}): missing top-level key '{key}'")
+            return warnings
+
+    value = raw["value"]
+    for key in _FIXED_BONUS_REQUIRED_VALUE:
+        if key not in value:
+            warnings.append(f"fixedBonus({match_id}).value: missing key '{key}'")
+
+    return warnings
+
+
 def parse_match_list(raw: dict) -> list[dict]:
     """
     Extract match basic info from getMatchDataPageListV1 response.

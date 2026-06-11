@@ -35,9 +35,12 @@ class Stats:
         self.matches_saved = 0
         self.sp_records = 0
         self.snapshots_inserted = 0
+        self.sp_deduped = 0
         self.api_calls = 0
         self.api_failures: list[str] = []
+        self.api_errors_logged = 0
         self.missing_fields: list[str] = []
+        self.schema_warnings: list[str] = []
         self.start_time = time.time()
 
     def report(self):
@@ -49,13 +52,19 @@ class Stats:
         print(f"  比赛入库:     {self.matches_saved}")
         print(f"  SP 记录数:    {self.sp_records}")
         print(f"  快照写入:     {self.snapshots_inserted}")
+        print(f"  快照去重:     {self.sp_deduped}")
         print(f"  API 调用:     {self.api_calls}")
         print(f"  API 失败:     {len(self.api_failures)}")
+        print(f"  异常落库:     {self.api_errors_logged}")
         print(f"  耗时:         {elapsed:.1f}s")
         if self.api_failures:
             print("\n失败列表:")
             for f in self.api_failures:
                 print(f"  ✗ {f}")
+        if self.schema_warnings:
+            print("\nSchema 告警:")
+            for w in self.schema_warnings:
+                print(f"  ⚠ {w}")
         if self.missing_fields:
             print("\n缺失字段:")
             for f in self.missing_fields:
@@ -74,6 +83,16 @@ def _save_raw(conn, source: str, url: str, raw: dict, match_id: str | None = Non
         return False
 
 
+def _log_api_error(conn, endpoint: str, error: str, stats: Stats,
+                   match_id: str | None = None, params: dict | None = None) -> None:
+    """Persist an API error to the database and count it."""
+    try:
+        db.save_api_error(conn, endpoint, error, match_id=match_id, request_params=params)
+        stats.api_errors_logged += 1
+    except Exception as e:
+        print(f"  ⚠ error logging failed: {e}")
+
+
 # ── Mode: match (single match) ───────────────────────────────────────────────
 
 def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
@@ -84,10 +103,17 @@ def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
     raw, err = api_client.fetch_fixed_bonus(match_id)
     if err:
         stats.api_failures.append(f"fixedBonus({match_id}): {err}")
+        _log_api_error(conn, "fixedBonus", err, stats, match_id=match_id)
         print(f"  ✗ 失败: {err}")
         return []
 
     _save_raw(conn, "fixedBonus", f"matchId={match_id}", raw, match_id)
+
+    # Schema validation
+    warnings = parsers.validate_fixed_bonus_schema(raw, match_id)
+    for w in warnings:
+        stats.schema_warnings.append(w)
+        print(f"  ⚠ {w}")
 
     records = parsers.parse_fixed_bonus(raw, match_id)
     if not records:
@@ -103,8 +129,10 @@ def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
             stats.missing_fields.append(f"match_id={match_id} play={r['play_type']} option={r['option_code']}: sp_value is None")
 
     inserted = db.save_sp_snapshots(conn, records)
+    deduped = len(records) - inserted
     stats.sp_records += len(records)
     stats.snapshots_inserted += inserted
+    stats.sp_deduped += deduped
 
     # Group for display
     by_play = {}
@@ -135,10 +163,17 @@ def run_today(conn, stats: Stats) -> None:
     raw, err = api_client.fetch_match_list()
     if err:
         stats.api_failures.append(f"matchList: {err}")
+        _log_api_error(conn, "matchList", err, stats)
         print(f"✗ 失败: {err}")
         return
 
     _save_raw(conn, "matchList", "method=concern", raw)
+
+    # Schema validation
+    warnings = parsers.validate_match_list_schema(raw)
+    for w in warnings:
+        stats.schema_warnings.append(w)
+        print(f"⚠ {w}")
 
     matches = parsers.parse_match_list(raw)
     stats.matches_found = len(matches)

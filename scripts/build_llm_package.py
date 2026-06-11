@@ -84,16 +84,12 @@ def main():
 
         # ── Summary ──────────────────────────────────────────────────────
         match = package["match"]
-        tc = package["time_context"]
-        sc = package["status_control"]
-        sigs = package["signals"]
-
         print(f"\n{'=' * 50}")
-        print(f"{match['home']} vs {match['away']}  ({match['league']})")
-        print(f"开赛: {match['match_time']}  距开赛: {tc['hours_to_kickoff']}h  阶段: {tc['phase']}")
-        print(f"状态: {sc['match_status_name']}  可投注: {sc['tradable']}")
-        print(f"信号: 正面{len(sigs['positive_signals'])} 负面{len(sigs['negative_signals'])} "
-              f"结构{len(sigs['structure_signals'])} 不确定{len(sigs['uncertainty_flags'])}")
+        print(f"{match['home_team']} vs {match['away_team']}  ({match['league']})")
+        print(f"开赛: {match['match_time']}  让球: {match['handicap_line']}")
+        print(f"最终研究优先级: {package['final_research_priority']}")
+        print(f"长期: {package['cross_window_summary']['long_term_direction']}")
+        print(f"临场: {package['cross_window_summary']['recent_change']}")
         print(f"{'=' * 50}")
 
     finally:

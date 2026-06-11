@@ -43,6 +43,13 @@ python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 0
 # 抓取赛果并回填 90 分钟胜平负结果
 python -m scripts.fetch_results --page-size 50
 
+# 单场 SP 趋势与市场结构分析
+python -m scripts.analyze_match_structure --match-id 2040162
+python -m scripts.analyze_match_structure --match-id 2040162 --debug --save
+
+# 当天/已入库比赛快速筛选
+python -m scripts.analyze_today_matches
+
 ```
 
 ### 生成 LLM 分析包
@@ -113,7 +120,9 @@ football/
 ├── scripts/
 │   ├── __init__.py
 │   ├── fetch_sporttery.py      # 赛程/SP 抓取入口
-│   └── fetch_results.py        # 赛果回填入口
+│   ├── fetch_results.py        # 赛果回填入口
+│   ├── analyze_match_structure.py # 单场结构分析
+│   └── analyze_today_matches.py   # 比赛快速筛选
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                # API 地址、请求头、DB 连接
@@ -121,6 +130,10 @@ football/
 │   ├── parsers.py               # 解析 API 响应
 │   ├── probability.py           # 隐含概率计算
 │   ├── sp_movement.py           # SP 变化计算
+│   ├── sp_trend.py              # SP 趋势结构化分析
+│   ├── market_structure.py      # 跨玩法市场结构判断
+│   ├── agent_report_schema.py   # LLM 结构化输入包
+│   ├── structure_analysis.py    # 分析编排
 │   ├── db.py                    # SQLite 数据库
 │   ├── llm_package.py           # LLM 分析包生成器
 │   └── tickets.py               # 胜平负手工票合法性校验
@@ -141,6 +154,7 @@ football/
 | `sporttery_raw_snapshot` | 原始 API 响应（永不覆盖） | 27 |
 | `sporttery_match` | 比赛主表 | 26 |
 | `sporttery_sp_snapshot` | SP 时间序列 + 隐含概率 | 483 |
+| `sporttery_market_analysis` | SP 趋势/市场结构分析快照 | 0+ |
 
 ### 连接方式
 
@@ -221,6 +235,77 @@ quote = quote_ticket_with_latest_sp(ticket, latest)
 
 注意：这里的报价只是基于本地最新快照重新计算。最终中奖奖金仍以体彩出票成功时的 SP 为准。
 
+---
+
+## SP 趋势与市场结构分析
+
+新增结构化分析链路：
+
+```text
+SP 快照
+  -> 同玩法趋势
+  -> normalized_implied_weight 变化
+  -> had/hhad/ttg 主方向
+  -> 跨玩法确认/冲突
+  -> 市场结构表达
+  -> LLM 解释包
+```
+
+核心原则：
+
+- SP 是中国体彩固定奖金，不是海外赔率。
+- `normalized_implied_weight` 只是同一玩法内部的市场表达权重，不是真实胜率。
+- 趋势计算、方向判断、跨玩法结构判断全部由代码完成。
+- LLM 只消费结构化结果，不直接从原始 SP 判断趋势。
+- 不输出“稳赚”“稳胆”“必买”“模型预测概率”。
+
+支持窗口：
+
+```text
+open_to_latest
+last_24h
+last_6h
+last_1h
+```
+
+同玩法趋势输出包括：
+
+- `sp_delta` / `sp_delta_pct`
+- `raw_implied_weight`
+- `normalized_implied_weight`
+- `normalized_weight_delta`
+- `sp_trend`
+- `weight_trend`
+- `main_direction`
+- `direction_confidence`
+
+跨玩法结构输出包括：
+
+- `main_market_expression`
+- `consistency_level`
+- `conflicts`
+- `risk_flags`
+- `suggested_focus`
+- `avoid_focus`
+- `research_priority`
+
+单场分析：
+
+```bash
+python -m scripts.analyze_match_structure --match-id 2040162
+python -m scripts.analyze_match_structure --match-id 2040162 --window open_to_latest --debug
+python -m scripts.analyze_match_structure --match-id 2040162 --save
+```
+
+快速筛选：
+
+```bash
+python -m scripts.analyze_today_matches
+python -m scripts.analyze_today_matches --window last_24h
+```
+
+`--save` 会写入 `sporttery_market_analysis`，用于保存赛前每次结构分析，便于后续复盘。
+
 ### 返还率参考
 
 由 SP 倒数和反推的理论返还率近似值，不等同于官方返奖比例。
@@ -290,96 +375,85 @@ python -m scripts.fetch_results --match-date 2026-06-10
 
 ```json
 {
-  "match": {},
-  "time_context": {},
-  "status_control": {},
-  "markets": { "had": {}, "hhad": {}, "ttg": {} },
-  "movement_profile": {},
-  "team_form": {},
-  "historical_context": {},
-  "signals": {
-    "positive_signals": [],
-    "negative_signals": [],
-    "structure_signals": [],
-    "uncertainty_flags": []
+  "match": {
+    "match_id": "2040162",
+    "match_num": "周三001",
+    "league": "世界杯",
+    "match_time": "2026-06-11T22:00:00+08:00",
+    "home_team": "法国",
+    "away_team": "丹麦",
+    "handicap_line": "-1"
   },
-  "llm_constraints": {}
+  "window_summaries": {
+    "open_to_latest": {
+      "market_structure": {},
+      "summary_signals": [],
+      "risk_flags": []
+    },
+    "last_24h": {
+      "market_structure": {},
+      "summary_signals": [],
+      "risk_flags": []
+    },
+    "last_6h": {
+      "market_structure": {},
+      "summary_signals": [],
+      "risk_flags": []
+    },
+    "last_1h": {
+      "market_structure": {},
+      "summary_signals": [],
+      "risk_flags": []
+    }
+  },
+  "cross_window_summary": {
+    "long_term_direction": "开售至今主胜方向增强",
+    "mid_term_direction": "最近6小时继续增强",
+    "recent_change": "临场主胜方向减弱",
+    "tempo_reading": "长期支持主队，但临场出现降温，需要谨慎。"
+  },
+  "final_research_priority": "B",
+  "llm_instruction": "请基于中国体彩竞彩足球SP变化分析市场表达。不要预测确定赛果，不要输出真实胜率，不要使用海外赔率逻辑。不要使用稳胆、必买、稳赚、模型预测等表达。"
 }
 ```
 
-### 信号分类规则
+### 约束
 
-**positive_signals：** SP 下降方向增强、概率提升、多玩法方向一致、状态数据利好
+- 输入以 `market_structure / summary_signals / risk_flags / cross_window_summary / final_research_priority` 为核心。
+- LLM 只解释结构化结果，不直接从原始 SP 计算趋势。
+- 不输出“必胜”“稳赚”“稳胆”“真实胜率”“模型预测概率”“建议下注多少”。
+- `confidence_type` 只能表示结构置信，不表示赛果概率。
 
-**negative_signals：** 与主方向相反或削弱主方向的信号，例如让胜未同步下降、主胜下降但平局也下降、总进球结构不支持大胜
+### 输出校验
 
-**structure_signals：** 玩法结构信号，不直接支持或反对主方向，但影响选市场策略。例如总进球低赔集中在 2/3 球、让球线偏深/偏浅
-
-**uncertainty_flags：** 暂停销售、历史样本不足、同奖无参考、SP 波动异常
-
-### 硬控件
-
-```json
-"llm_constraints": {
-  "can_recommend_ticket": false,       // 暂停销售时为 false
-  "reason": "暂停销售",
-  "allowed_output": "analysis_only",   // 只能分析，不能推荐
-  "forbidden_phrases": ["稳赢", "必买", "稳胆", "必中", "无脑"]
-}
-```
-
-### movement_profile 字段
-
-```json
-{
-  "direction": "down",       // up / down / flat
-  "pattern": "gradual",      // stable / gradual / moderate / sharp
-  "volatility": "low",       // low / medium / high
-  "sp_change": -0.04,
-  "sp_change_pct": -0.0299,
-  "prob_change": 0.0201
-}
-```
-
-### time_context.phase（纯时间维度）
-
-| 阶段 | 条件 | 含义 |
-|------|------|------|
-| early_pre_match | >24h | 开盘早期趋势 |
-| pre_match | 3-24h | 赛前观察 |
-| late_pre_match | 0-3h | 临场异动期 |
-| closed_or_result | <0h 或已停售 | 赛后 |
-
-销售状态在 `status_control` 中单独判断，不混入时间阶段。
+- 字段完整性校验
+- 禁用词校验
+- JSON parse 校验
 
 ### LLM 输出 JSON Schema
 
 ```json
 {
-  "summary": "",
-  "direction": "home_lean | draw_lean | away_lean | no_clear_direction",
-  "market_view": {
-    "preferred": "had | hhad | ttg | none",
-    "avoid": [],
-    "reason": ""
-  },
-  "goal_view": {
-    "range": "0-1 | 2-3 | 4+ | unclear",
-    "reason": ""
-  },
-  "risk_level": "low | medium | high",
-  "confidence_level": "low | medium | high",
-  "key_reasons": [],
-  "risk_flags": [],
-  "structure_notes": [],
-  "watch_items": [],
-  "action": "analysis_only | observe | no_action"
+  "market_reading": "市场当前主要表达...",
+  "play_consistency": "胜平负、让球、总进球之间的关系...",
+  "tempo_reading": "长期与临场变化节奏...",
+  "risk_explanations": [
+    {
+      "risk": "让球未确认大胜",
+      "explanation": "胜平负主胜增强，但让球胜平负没有同步支持让胜，说明市场更偏主队小胜或不穿。"
+    }
+  ],
+  "suggested_human_focus": [
+    "优先人工查看胜平负主胜方向",
+    "观察总进球2/3球结构"
+  ],
+  "avoid_or_caution": [
+    "谨慎直接追让胜"
+  ],
+  "research_priority": "A",
+  "confidence_type": "structure_confidence_not_win_probability"
 }
 ```
-
-`match_status` 暂停销售时强制 `"action": "analysis_only"`。
-
-`confidence_level` 由 LLM 输出等级（low/medium/high），不输出假精确数字。后续由系统根据 SP 一致性、变化幅度、数据完整度等计算 `system_confidence_score`。
 
 ---
 
@@ -395,9 +469,9 @@ python -m scripts.fetch_results --match-date 2026-06-10
 ✅ 5.2 出票前按最新 SP 重新报价
 ✅ 6. 定时快照
 ✅ 7. SP 变化指标
-⬜ 8. 信号识别
+✅ 8. SP 趋势与市场结构信号识别
 ✅ 9. LLM match package（v2）
-⬜ 10. LLM 分析报告
+✅ 10. LLM 结构化输入包
 ✅ 11. 赛果回填
 ⬜ 12. 复盘评估
 ```

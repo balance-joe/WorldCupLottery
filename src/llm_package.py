@@ -12,111 +12,39 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from src.structure_analysis import analyze_match_windows
+
+
+def build_market_structure_llm_package(
+    match_info: dict,
+    sp_history: list[dict],
+    *,
+    windows: list[str] | tuple[str, ...] | None = None,
+    debug: bool = False,
+) -> dict:
+    """
+    Build the new LLM input package centered on market_structure.
+
+    LLMs should consume this structure instead of inferring trends directly from
+    raw SP rows.
+    """
+    result = analyze_match_windows(
+        match_info,
+        sp_history,
+        windows=tuple(windows) if windows else ("open_to_latest", "last_24h", "last_6h", "last_1h"),
+        include_debug=debug,
+    )
+    return result["llm_input"]
+
 
 def build_llm_package(
     match_info: dict,
     sp_history: list[dict],
     match_detail: dict | None = None,
 ) -> dict:
-    """
-    Build a complete LLM package from match data.
-
-    Args:
-        match_info: from sporttery_match table
-        sp_history: from sporttery_sp_snapshot table (all play types)
-        match_detail: optional, from detail APIs (feature, result, etc.)
-    """
-    now = datetime.now()
-    match_time = match_info.get("match_time")
-    if isinstance(match_time, str):
-        match_time = datetime.strptime(match_time, "%Y-%m-%d %H:%M:%S")
-
-    # ── Time context ─────────────────────────────────────────────────────
-    hours_to_kickoff = None
-    if match_time:
-        delta = match_time - now
-        hours_to_kickoff = round(delta.total_seconds() / 3600, 2)
-
-    phase = _classify_phase(hours_to_kickoff, match_info.get("match_status"))
-
-    time_context = {
-        "snapshot_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "match_time": match_time.strftime("%Y-%m-%d %H:%M") if match_time else None,
-        "hours_to_kickoff": hours_to_kickoff,
-        "phase": phase,
-    }
-
-    # ── Status control ───────────────────────────────────────────────────
-    status = match_info.get("match_status", "")
-    tradable = status == "1"
-    hard_stop_reason = None
-    if not tradable:
-        status_map = {"3": "暂停销售", "2": "未开售", "4": "已停售"}
-        hard_stop_reason = status_map.get(status, f"状态码={status}")
-
-    status_control = {
-        "tradable": tradable,
-        "match_status": status,
-        "match_status_name": hard_stop_reason or "在售",
-        "hard_stop_reason": hard_stop_reason,
-    }
-
-    # ── Markets (SP + movement) ──────────────────────────────────────────
-    markets = {}
-    for play_type, play_name in [("had", "胜平负"), ("hhad", "让球胜平负"), ("ttg", "总进球")]:
-        records = [r for r in sp_history if r["play_type"] == play_type]
-        if not records:
-            continue
-        markets[play_type] = _build_market(play_type, records)
-
-    # ── Movement profile ─────────────────────────────────────────────────
-    movement_profile = {}
-    for play_type in ["had", "hhad"]:
-        if play_type in markets:
-            mkt = markets[play_type]
-            for opt in mkt.get("options", []):
-                key = f"{play_type}_{opt['code']}"
-                movement_profile[key] = _build_movement(opt)
-
-    # ── Team form ────────────────────────────────────────────────────────
-    team_form = {}
-    if match_detail:
-        team_form = _build_team_form(match_detail)
-
-    # ── Historical context ───────────────────────────────────────────────
-    historical_context = {}
-    if match_detail:
-        historical_context = _build_historical(match_detail)
-
-    # ── Signals ──────────────────────────────────────────────────────────
-    signals = _classify_signals(markets, movement_profile, team_form, historical_context, status_control)
-
-    # ── LLM constraints ──────────────────────────────────────────────────
-    llm_constraints = {
-        "can_recommend_ticket": tradable,
-        "reason": hard_stop_reason if not tradable else None,
-        "allowed_output": "full_analysis" if tradable else "analysis_only",
-        "forbidden_phrases": ["稳赢", "必买", "稳胆", "必中", "无脑"],
-    }
-
-    return {
-        "match": {
-            "match_id": match_info.get("match_id"),
-            "match_num": match_info.get("match_num"),
-            "league": match_info.get("league_name"),
-            "home": match_info.get("home_team_name"),
-            "away": match_info.get("away_team_name"),
-            "match_time": match_time.strftime("%Y-%m-%d %H:%M") if match_time else None,
-        },
-        "time_context": time_context,
-        "status_control": status_control,
-        "markets": markets,
-        "movement_profile": movement_profile,
-        "team_form": team_form,
-        "historical_context": historical_context,
-        "signals": signals,
-        "llm_constraints": llm_constraints,
-    }
+    """Compatibility wrapper for the new market-structure-centered package."""
+    del match_detail
+    return build_market_structure_llm_package(match_info, sp_history)
 
 
 # ── Internal builders ───────────────────────────────────────────────────────

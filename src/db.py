@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS sporttery_sp_snapshot (
     implied_prob_raw REAL NULL,
     implied_prob_norm REAL NULL,
     prob_sum REAL NULL,
+    content_hash TEXT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE (match_id, snapshot_time, play_type, option_code)
 );
@@ -92,6 +93,40 @@ CREATE TABLE IF NOT EXISTS sporttery_signal (
     description TEXT NOT NULL,
     evidence_json TEXT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+"""
+
+DDL_API_ERROR = """
+CREATE TABLE IF NOT EXISTS sporttery_api_error (
+    id INTEGER PRIMARY KEY,
+    endpoint TEXT NOT NULL,
+    request_params TEXT NULL,
+    match_id TEXT NULL,
+    http_status INTEGER NULL,
+    error_message TEXT NOT NULL,
+    retry_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+"""
+
+DDL_MARKET_ANALYSIS = """
+CREATE TABLE IF NOT EXISTS sporttery_market_analysis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL,
+    analysis_time TEXT NOT NULL,
+    window TEXT NOT NULL,
+    had_direction TEXT,
+    hhad_direction TEXT,
+    ttg_direction TEXT,
+    consistency_level TEXT,
+    main_market_expression TEXT,
+    research_priority TEXT,
+    risk_flags_json TEXT,
+    suggested_focus_json TEXT,
+    avoid_focus_json TEXT,
+    raw_analysis_json TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(match_id, analysis_time, window)
 );
 """
 
@@ -145,7 +180,10 @@ def ensure_tables(conn: Connection | None = None) -> None:
         conn.execute(DDL_MATCH)
         conn.execute(DDL_SP_SNAPSHOT)
         conn.execute(DDL_SIGNAL)
+        conn.execute(DDL_API_ERROR)
+        conn.execute(DDL_MARKET_ANALYSIS)
         _ensure_match_result_columns(conn)
+        _ensure_raw_snapshot_version_column(conn)
         conn.commit()
     finally:
         if close:
@@ -162,26 +200,75 @@ def save_raw_snapshot(
     match_id: str | None = None,
     request_params: dict | None = None,
 ) -> bool:
-    """Save raw API response. Returns True if inserted, False if duplicate."""
+    """Save raw API response. Returns True if inserted, False if duplicate.
+
+    Also tracks *response_version*: increments per (source_name, match_id)
+    so you can see how many distinct snapshots have been captured.
+    """
     raw_str = json.dumps(raw_json, ensure_ascii=False, separators=(",", ":"))
     content_hash = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Check for duplicate content hash first
+    existing = conn.execute(
+        "SELECT id FROM sporttery_raw_snapshot WHERE content_hash = ?",
+        (content_hash,),
+    ).fetchone()
+    if existing:
+        return False
+
+    # Compute next version for this (source_name, match_id)
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(response_version), 0) FROM sporttery_raw_snapshot
+        WHERE source_name = ? AND (match_id = ? OR (match_id IS NULL AND ? IS NULL))
+        """,
+        (source_name, match_id, match_id),
+    ).fetchone()
+    version = (row[0] or 0) + 1
+
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO sporttery_raw_snapshot
+        INSERT INTO sporttery_raw_snapshot
             (source_name, source_url, request_params, match_id,
-             snapshot_time, raw_content, content_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             snapshot_time, raw_content, content_hash, response_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             source_name, source_url,
             json.dumps(request_params, ensure_ascii=False) if request_params else None,
-            match_id, now, raw_str, content_hash,
+            match_id, now, raw_str, content_hash, version,
         ),
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+def save_api_error(
+    conn: Connection,
+    endpoint: str,
+    error_message: str,
+    *,
+    match_id: str | None = None,
+    request_params: dict | None = None,
+    http_status: int | None = None,
+    retry_count: int = 0,
+) -> None:
+    """Persist an API error for later analysis."""
+    conn.execute(
+        """
+        INSERT INTO sporttery_api_error
+            (endpoint, request_params, match_id, http_status,
+             error_message, retry_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            endpoint,
+            json.dumps(request_params, ensure_ascii=False) if request_params else None,
+            match_id, http_status, error_message, retry_count,
+        ),
+    )
+    conn.commit()
 
 
 # Match
@@ -282,34 +369,63 @@ def save_match_results(conn: Connection, results: list[dict]) -> int:
 # SP snapshot
 
 def save_sp_snapshots(conn: Connection, records: list[dict]) -> int:
-    """Bulk insert SP snapshot records. Each record carries its own snapshot_time."""
+    """Bulk insert SP snapshot records with content-hash dedup.
+
+    If a record's (match_id, play_type, option_code, sp_value, goal_line,
+    is_single) combination already exists for the same snapshot_time, the
+    row is skipped instead of replaced.
+    """
     if not records:
         return 0
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    rows = []
-    for r in records:
-        rows.append((
-            r["match_id"],
-            r.get("snapshot_time", now),
-            r["play_type"], r["option_code"],
-            r.get("option_name"), r["sp_value"], r.get("goal_line"),
-            r.get("is_single", 0), r.get("implied_prob_raw"),
-            r.get("implied_prob_norm"), r.get("prob_sum"),
-        ))
+    _ensure_sp_snapshot_hash_column(conn)
 
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO sporttery_sp_snapshot
-            (match_id, snapshot_time, play_type, option_code, option_name,
-             sp_value, goal_line, is_single,
-             implied_prob_raw, implied_prob_norm, prob_sum)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    inserted = 0
+    for r in records:
+        st = r.get("snapshot_time", now)
+        h = _sp_content_hash(r["match_id"], r["play_type"], r["option_code"],
+                             r["sp_value"], r.get("goal_line"), r.get("is_single", 0))
+        # Skip if same content already stored for this snapshot_time
+        existing = conn.execute(
+            "SELECT id FROM sporttery_sp_snapshot WHERE match_id=? AND snapshot_time=? "
+            "AND play_type=? AND option_code=? AND content_hash=?",
+            (r["match_id"], st, r["play_type"], r["option_code"], h),
+        ).fetchone()
+        if existing:
+            continue
+
+        inserted += 1
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO sporttery_sp_snapshot
+                (match_id, snapshot_time, play_type, option_code, option_name,
+                 sp_value, goal_line, is_single,
+                 implied_prob_raw, implied_prob_norm, prob_sum, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                r["match_id"], st, r["play_type"], r["option_code"],
+                r.get("option_name"), r["sp_value"], r.get("goal_line"),
+                r.get("is_single", 0), r.get("implied_prob_raw"),
+                r.get("implied_prob_norm"), r.get("prob_sum"), h,
+            ),
+        )
     conn.commit()
-    return len(rows)
+    return inserted
+
+
+def _sp_content_hash(
+    match_id: str,
+    play_type: str,
+    option_code: str,
+    sp_value: float,
+    goal_line: str | None,
+    is_single: int,
+) -> str:
+    """Deterministic hash of SP-critical fields."""
+    raw = f"{match_id}|{play_type}|{option_code}|{sp_value}|{goal_line}|{is_single}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def fetch_sp_history(
@@ -337,6 +453,28 @@ def fetch_sp_history(
     return _fetch_dicts(cur)
 
 
+def fetch_all_sp_history(
+    conn: Connection,
+    match_ids: list[str] | tuple[str, ...],
+) -> list[dict]:
+    """Fetch SP history rows for all supported play types at once."""
+    if not match_ids:
+        return []
+
+    ids = [str(match_id) for match_id in match_ids]
+    placeholders = ", ".join(["?"] * len(ids))
+    cur = conn.execute(
+        f"""
+        SELECT *
+        FROM sporttery_sp_snapshot
+        WHERE match_id IN ({placeholders})
+        ORDER BY match_id, play_type, option_code, snapshot_time
+        """,
+        tuple(ids),
+    )
+    return _fetch_dicts(cur)
+
+
 def fetch_latest_sp_snapshots(
     conn: Connection,
     match_ids: list[str] | tuple[str, ...],
@@ -345,6 +483,63 @@ def fetch_latest_sp_snapshots(
 ) -> list[dict]:
     """Fetch latest SP row per match/play/option from stored history."""
     return latest_records(fetch_sp_history(conn, match_ids, play_type=play_type))
+
+
+def fetch_match(conn: Connection, match_id: str) -> dict | None:
+    """Fetch one match by match_id."""
+    cur = conn.execute("SELECT * FROM sporttery_match WHERE match_id = ?", (str(match_id),))
+    row = cur.fetchone()
+    if not row:
+        return None
+    cols = [d[0] for d in cur.description]
+    return dict(zip(cols, row))
+
+
+def fetch_matches_for_analysis(conn: Connection, match_date: str | None = None) -> list[dict]:
+    """Fetch matches that have SP history, optionally filtered by local match date."""
+    sql = """
+        SELECT DISTINCT m.*
+        FROM sporttery_match m
+        JOIN sporttery_sp_snapshot s ON s.match_id = m.match_id
+    """
+    params: tuple[str, ...] = ()
+    if match_date:
+        sql += "\n        WHERE date(m.match_time) = ?"
+        params = (match_date,)
+    sql += "\n        ORDER BY m.match_time"
+    cur = conn.execute(sql, params)
+    return _fetch_dicts(cur)
+
+
+def save_market_analysis(conn: Connection, analysis: dict) -> None:
+    """Save one market structure analysis snapshot."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO sporttery_market_analysis
+            (match_id, analysis_time, window, had_direction, hhad_direction,
+             ttg_direction, consistency_level, main_market_expression,
+             research_priority, risk_flags_json, suggested_focus_json,
+             avoid_focus_json, raw_analysis_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(analysis["match_id"]),
+            analysis.get("analysis_time") or now,
+            analysis["window"],
+            analysis.get("had_direction"),
+            analysis.get("hhad_direction"),
+            analysis.get("ttg_direction"),
+            analysis.get("consistency_level"),
+            analysis.get("main_market_expression"),
+            analysis.get("research_priority"),
+            json.dumps(analysis.get("risk_flags", []), ensure_ascii=False),
+            json.dumps(analysis.get("suggested_focus", []), ensure_ascii=False),
+            json.dumps(analysis.get("avoid_focus", []), ensure_ascii=False),
+            json.dumps(analysis, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
 
 
 def _fetch_dicts(cur) -> list[dict]:
@@ -367,3 +562,30 @@ def _ensure_match_result_columns(conn: Connection) -> None:
     for name, ddl in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE sporttery_match ADD COLUMN {name} {ddl}")
+
+
+def _ensure_raw_snapshot_version_column(conn: Connection) -> None:
+    """Add response_version column to sporttery_raw_snapshot if missing."""
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(sporttery_raw_snapshot)").fetchall()
+    }
+    if "response_version" not in existing:
+        conn.execute("ALTER TABLE sporttery_raw_snapshot ADD COLUMN response_version INTEGER DEFAULT 1")
+
+
+_sp_hash_column_checked = False
+
+
+def _ensure_sp_snapshot_hash_column(conn: Connection) -> None:
+    """Add content_hash column to sporttery_sp_snapshot if missing (once)."""
+    global _sp_hash_column_checked
+    if _sp_hash_column_checked:
+        return
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(sporttery_sp_snapshot)").fetchall()
+    }
+    if "content_hash" not in existing:
+        conn.execute("ALTER TABLE sporttery_sp_snapshot ADD COLUMN content_hash TEXT NULL")
+    _sp_hash_column_checked = True
