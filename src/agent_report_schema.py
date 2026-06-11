@@ -23,15 +23,21 @@ def build_agent_report_package(
     window_structures: dict[str, MarketStructure],
     *,
     debug_trends: dict[str, Any] | None = None,
+    non_sp_evidence: dict[str, Any] | None = None,
+    sp_research_priority: str | None = None,
+    non_sp_blend_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build compact default input for LLM market-expression explanation."""
     window_summaries = {}
+    market_structure_summary = {}
     for window, structure in window_structures.items():
+        structure_dict = structure.to_dict()
         window_summaries[window] = {
-            "market_structure": structure.to_dict(),
+            "market_structure": structure_dict,
             "summary_signals": _summary_signals(structure),
             "risk_flags": [risk.to_dict() for risk in structure.risk_flags],
         }
+        market_structure_summary[window] = structure_dict
 
     package = {
         "match": {
@@ -45,11 +51,19 @@ def build_agent_report_package(
         },
         "window_summaries": window_summaries,
         "cross_window_summary": build_cross_window_summary(window_structures),
+        "market_structure": market_structure_summary,
+        "public_info_context": _public_info_context(non_sp_evidence),
         "final_research_priority": final_research_priority(window_structures),
         "llm_instruction": LLM_INSTRUCTION,
     }
     if debug_trends is not None:
-        package["debug_trend_details"] = debug_trends
+        package["debug"] = {"sp_trend_details": debug_trends}
+    if non_sp_evidence is not None:
+        package["non_sp_evidence"] = non_sp_evidence
+    if sp_research_priority is not None:
+        package["sp_research_priority"] = sp_research_priority
+    if non_sp_blend_summary is not None:
+        package["non_sp_blend_summary"] = non_sp_blend_summary
     return package
 
 
@@ -166,3 +180,31 @@ def _iso_match_time(value) -> str | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=CHINA_TZ)
     return dt.astimezone(CHINA_TZ).isoformat()
+
+
+def _public_info_context(non_sp_evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not non_sp_evidence:
+        return {
+            "trigger_reason": "not_checked",
+            "public_info_alignment": "not_checked",
+            "public_info_reading": "未触发公开信息检索。",
+            "findings": [],
+            "unresolved_questions": [],
+        }
+    findings = list(non_sp_evidence.get("supporting_factors", []))
+    unresolved = list(non_sp_evidence.get("risk_factors", []))
+    alignment = {
+        "home": "supports_sp_move",
+        "away": "conflicts_with_sp_move",
+        "neutral": "mixed_public_info" if findings or unresolved else "no_public_explanation",
+    }.get(non_sp_evidence.get("non_sp_lean"), "no_public_explanation")
+    reading = "未发现可靠公开信息解释该 SP 异动。"
+    if findings:
+        reading = "公开信息提供了部分背景线索，但仍需结合 SP 结构理解。"
+    return {
+        "trigger_reason": "non_sp_detail_bundle",
+        "public_info_alignment": alignment,
+        "public_info_reading": reading,
+        "findings": findings,
+        "unresolved_questions": unresolved,
+    }

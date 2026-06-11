@@ -7,16 +7,39 @@ import time
 import requests
 
 from src.config import (
+    API_FUTURE_MATCHES,
     API_FIXED_BONUS,
+    API_INJURY_SUSPENSION,
     API_MATCH_LIST,
+    API_MATCH_FEATURE,
+    API_MATCH_HEAD,
+    API_MATCH_PLAYER,
+    API_MATCH_RESULT,
+    API_MATCH_TABLES,
     API_RESULT_LIST,
+    API_RESULT_HISTORY,
+    API_SAME_ODDS,
     REQUEST_TIMEOUT,
     SPORTTERY_HEADERS,
+    API_TEAM_POOLDIV_STATS,
 )
 
 # Retry defaults
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.0  # seconds; doubles each retry: 1s, 2s, 4s
+
+DETAIL_APIS = {
+    "matchHead": API_MATCH_HEAD,
+    "matchFeature": API_MATCH_FEATURE,
+    "matchResult": API_MATCH_RESULT,
+    "resultHistory": API_RESULT_HISTORY,
+    "futureMatches": API_FUTURE_MATCHES,
+    "matchTables": API_MATCH_TABLES,
+    "matchPlayer": API_MATCH_PLAYER,
+    "injurySuspension": API_INJURY_SUSPENSION,
+    "sameOdds": API_SAME_ODDS,
+    "teamPooldivStats": API_TEAM_POOLDIV_STATS,
+}
 
 
 def _get(
@@ -97,3 +120,40 @@ def fetch_result_list(
     if match_date:
         params["matchDate"] = match_date
     return _get(API_RESULT_LIST, params=params)
+
+
+def fetch_detail_api(
+    source_name: str,
+    match_id: str | int,
+    *,
+    extra_params: dict | None = None,
+) -> tuple[dict | None, str | None]:
+    """Fetch one football detail endpoint by source name."""
+    url = DETAIL_APIS.get(source_name)
+    if not url:
+        return None, f"unsupported detail api: {source_name}"
+    params = {"matchId": str(match_id)}
+    if extra_params:
+        params.update(extra_params)
+    return _get(url, params=params)
+
+
+def fetch_match_detail_bundle(
+    match_id: str | int,
+    *,
+    sources: tuple[str, ...] | list[str] | None = None,
+) -> tuple[dict[str, dict], dict[str, str]]:
+    """Fetch a bundle of football detail endpoints.
+
+    Returns `(payloads, errors)`.
+    """
+    selected = tuple(sources) if sources else tuple(DETAIL_APIS.keys())
+    payloads: dict[str, dict] = {}
+    errors: dict[str, str] = {}
+    for source_name in selected:
+        data, err = fetch_detail_api(source_name, match_id)
+        if err:
+            errors[source_name] = err
+        elif data is not None:
+            payloads[source_name] = data
+    return payloads, errors

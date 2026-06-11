@@ -46,9 +46,14 @@ python -m scripts.fetch_results --page-size 50
 # 单场 SP 趋势与市场结构分析
 python -m scripts.analyze_match_structure --match-id 2040162
 python -m scripts.analyze_match_structure --match-id 2040162 --debug --save
+python -m scripts.analyze_match_structure --match-id 2040162 --with-detail --fetch-detail --debug
 
 # 当天/已入库比赛快速筛选
 python -m scripts.analyze_today_matches
+python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-detail
+
+# 单场抓取非SP详情证据
+python -m scripts.fetch_match_details --match-id 2040162 --output data/match_2040162_detail.json
 
 ```
 
@@ -302,9 +307,28 @@ python -m scripts.analyze_match_structure --match-id 2040162 --save
 ```bash
 python -m scripts.analyze_today_matches
 python -m scripts.analyze_today_matches --window last_24h
+python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-detail
 ```
 
 `--save` 会写入 `sporttery_market_analysis`，用于保存赛前每次结构分析，便于后续复盘。
+
+### 非 SP 证据层
+
+除 SP 市场表达外，项目现在还支持接入 detail APIs 形成第二层证据：
+
+- `matchResult`：近况与近 5 场表现
+- `matchFeature`：近 10 场进失球、主客记录
+- `resultHistory`：历史交锋
+- `matchTables`：排名信息
+- `injurySuspension`：伤停数量
+- `sameOdds`：同奖样本
+- `futureMatches`：后续赛程
+
+当前策略：
+
+- `SP` 决定市场表达与基础优先级
+- `非SP` 决定基本面倾向与校正
+- `final_research_priority` 会在 `sp_research_priority` 基础上做一级上调或下调
 
 ### 返还率参考
 

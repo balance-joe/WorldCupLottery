@@ -7,6 +7,16 @@ BASE_URL = "https://webapi.sporttery.cn/gateway"
 API_MATCH_LIST = f"{BASE_URL}/uniform/fb/getMatchDataPageListV1.qry"
 API_RESULT_LIST = API_MATCH_LIST
 API_FIXED_BONUS = f"{BASE_URL}/uniform/football/getFixedBonusV1.qry"
+API_MATCH_HEAD = f"{BASE_URL}/uniform/football/getMatchHeadV1.qry"
+API_MATCH_FEATURE = f"{BASE_URL}/uniform/football/getMatchFeatureV1.qry"
+API_MATCH_RESULT = f"{BASE_URL}/uniform/football/getMatchResultV1.qry"
+API_RESULT_HISTORY = f"{BASE_URL}/uniform/football/getResultHistoryV1.qry"
+API_FUTURE_MATCHES = f"{BASE_URL}/uniform/football/getFutureMatchesV1.qry"
+API_MATCH_TABLES = f"{BASE_URL}/uniform/football/getMatchTablesV1.qry"
+API_MATCH_PLAYER = f"{BASE_URL}/uniform/football/getMatchPlayerV1.qry"
+API_INJURY_SUSPENSION = f"{BASE_URL}/uniform/football/getInjurySuspensionV1.qry"
+API_SAME_ODDS = f"{BASE_URL}/uniform/football/getSameOddsV1.qry"
+API_TEAM_POOLDIV_STATS = f"{BASE_URL}/uniform/football/getTeamPooldivStatsV1.qry"
 
 SPORTTERY_HEADERS = {
     "accept": "application/json, text/plain, */*",
