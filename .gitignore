@@ -1,23 +1,63 @@
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build and package outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Local databases
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/sporttery.db
+
+# Generated data
+data/packages/
+data/*.json
+data/*.txt
+!data/.gitkeep
+
+# Logs and runtime files
+*.log
+logs/
+tmp/
+temp/
+
+# Local editor and OS files
 .vscode/
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-files
-*.bclicense
-*.flf
-#Test results file
-TestResults.xml
+.idea/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+
+# Local agent/tool state
+.claude/
+.codex/
+.agents/
+.playwright-mcp/
+
+# Raw API samples kept outside data/
+api_*.json
+sporttery_response.json
+odds_sample.txt
