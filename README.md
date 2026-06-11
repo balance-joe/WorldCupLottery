@@ -40,6 +40,9 @@ python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 1
 # 每 5 分钟一直抓，Ctrl+C 停止
 python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 0
 
+# 抓取赛果并回填 90 分钟胜平负结果
+python -m scripts.fetch_results --page-size 50
+
 ```
 
 ### 生成 LLM 分析包
@@ -109,7 +112,8 @@ print(quote.min_potential_payout, quote.max_potential_payout)
 football/
 ├── scripts/
 │   ├── __init__.py
-│   └── fetch_sporttery.py      # CLI 入口
+│   ├── fetch_sporttery.py      # 赛程/SP 抓取入口
+│   └── fetch_results.py        # 赛果回填入口
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                # API 地址、请求头、DB 连接
@@ -151,6 +155,7 @@ football/
 | API | 端点 | 用途 |
 |-----|------|------|
 | 赛程列表 | `getMatchDataPageListV1.qry?method=concern` | 比赛列表 + 基础 SP |
+| 赛果开奖 | `getMatchDataPageListV1.qry?method=result&pageSize=20` | 赛果列表；字段 `sectionsNo999` 作为 90 分钟全场比分 |
 | 完整 SP | `getFixedBonusV1.qry?clientCode=3001&matchId=` | 5 玩法当前 SP；API 自带 3-6 条历史变化记录，额外变化由定时快照补充 |
 
 ### 对阵详情（已探明，待集成）
@@ -250,6 +255,32 @@ quote = quote_ticket_with_latest_sp(ticket, latest)
 - 串关至少 2 场，`N` 必须等于选择的比赛场数。
 - 同一张票里同一场比赛只能出现一次，避免同场不同玩法或重复选择混入串关。
 - 金额按 `注数 * 2元 * 倍数` 计算；复式选项会增加注数，例如 1 场选 `H/D`、另一场选 `A`，`2x1` 为 2 注。
+
+---
+
+## 赛果回填
+
+赛果源使用移动端足球数据页面 `https://m.sporttery.cn/mjc/zqsj/?tab=result` 的真实列表接口：
+
+```text
+getMatchDataPageListV1.qry?method=result&pageSize=20
+```
+
+回填规则：
+
+- `sectionsNo999` 作为 90 分钟全场比分，符合项目规则“足球结果为 90 分钟含伤停补时”。
+- `sectionsNo1` 保存为半场比分，仅用于参考。
+- `matchStatus=11` 等赛果页完成状态可回填；无法解析比分或 `无效场次` 不写入 `result_90`。
+- `result_90`：主胜 `H`，平 `D`，客胜 `A`。
+
+运行：
+
+```bash
+python -m scripts.fetch_results --page-size 50
+python -m scripts.fetch_results --match-date 2026-06-10
+```
+
+回填字段写入 `sporttery_match.home_score_90`、`away_score_90`、`result_90`、`half_score`、`full_score_90`。
 
 ---
 
@@ -367,7 +398,7 @@ quote = quote_ticket_with_latest_sp(ticket, latest)
 ⬜ 8. 信号识别
 ✅ 9. LLM match package（v2）
 ⬜ 10. LLM 分析报告
-⬜ 11. 赛果回填
+✅ 11. 赛果回填
 ⬜ 12. 复盘评估
 ```
 

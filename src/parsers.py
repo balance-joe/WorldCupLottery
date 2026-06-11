@@ -121,6 +121,57 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
     return records
 
 
+def parse_result_list(raw: dict) -> list[dict]:
+    """
+    Extract completed match results from getMatchDataPageListV1(method=result).
+
+    sectionsNo999 is the page's full-time score field. Per project rules this
+    is treated as football result over 90 minutes including stoppage time.
+    """
+    results = []
+    for day in raw.get("value", {}).get("matchInfoList", []):
+        for m in day.get("subMatchList", []):
+            full_score = m.get("sectionsNo999")
+            home_score, away_score = _parse_score(full_score)
+            result_90 = None
+            if home_score is not None and away_score is not None:
+                if home_score > away_score:
+                    result_90 = "H"
+                elif home_score < away_score:
+                    result_90 = "A"
+                else:
+                    result_90 = "D"
+
+            match_time_str = f"{m.get('matchDate', '')} {m.get('matchTime', '')}".strip()
+            match_time = None
+            if match_time_str and match_time_str != " ":
+                try:
+                    match_time = datetime.strptime(match_time_str, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    pass
+
+            results.append({
+                "match_id": str(m.get("matchId", "")),
+                "match_num": m.get("matchNumStr", ""),
+                "league_id": str(m.get("leagueId", "")),
+                "league_name": m.get("leagueAbbName", ""),
+                "home_team_id": str(m.get("homeTeamId", "")),
+                "away_team_id": str(m.get("awayTeamId", "")),
+                "home_team_name": m.get("homeTeamAbbName", ""),
+                "away_team_name": m.get("awayTeamAbbName", ""),
+                "match_time": match_time,
+                "match_status": str(m.get("matchStatus", "")),
+                "match_status_name": m.get("matchStatusName", ""),
+                "half_score": m.get("sectionsNo1"),
+                "full_score_90": full_score,
+                "home_score_90": home_score,
+                "away_score_90": away_score,
+                "result_90": result_90,
+                "result_source": "sporttery_zqsj",
+            })
+    return results
+
+
 def _parse_update_time(item: dict) -> str:
     """Extract updateDate + updateTime as 'YYYY-MM-DD HH:MM:SS'."""
     date = item.get("updateDate", "")
@@ -139,3 +190,13 @@ def _safe_decimal(val) -> float | None:
         return v if v > 0 else None
     except (ValueError, TypeError):
         return None
+
+
+def _parse_score(score) -> tuple[int | None, int | None]:
+    if not isinstance(score, str) or ":" not in score:
+        return None, None
+    left, right = score.split(":", 1)
+    try:
+        return int(left), int(right)
+    except ValueError:
+        return None, None

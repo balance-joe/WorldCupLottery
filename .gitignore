@@ -55,6 +55,7 @@ Thumbs.db
 .claude/
 .codex/
 .agents/
+.playwright-mcp/
 
 # Raw API samples kept outside data/
 api_*.json

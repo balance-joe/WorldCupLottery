@@ -46,9 +46,14 @@ CREATE TABLE IF NOT EXISTS sporttery_match (
     away_team_name TEXT NULL,
     match_time TEXT NULL,
     match_status TEXT NULL,
+    match_status_name TEXT NULL,
     home_score_90 INTEGER NULL,
     away_score_90 INTEGER NULL,
     result_90 TEXT NULL,
+    half_score TEXT NULL,
+    full_score_90 TEXT NULL,
+    result_source TEXT NULL,
+    result_updated_at TEXT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
@@ -140,6 +145,7 @@ def ensure_tables(conn: Connection | None = None) -> None:
         conn.execute(DDL_MATCH)
         conn.execute(DDL_SP_SNAPSHOT)
         conn.execute(DDL_SIGNAL)
+        _ensure_match_result_columns(conn)
         conn.commit()
     finally:
         if close:
@@ -217,6 +223,62 @@ def save_matches(conn: Connection, matches: list[dict]) -> int:
     return len(matches)
 
 
+def save_match_result(conn: Connection, result: dict) -> None:
+    """UPSERT one match result from Sporttery football data."""
+    r = dict(result)
+    if r.get("match_time") and hasattr(r["match_time"], "strftime"):
+        r["match_time"] = r["match_time"].strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    conn.execute(
+        """
+        INSERT INTO sporttery_match
+            (match_id, match_num, league_id, league_name,
+             home_team_id, away_team_id, home_team_name, away_team_name,
+             match_time, match_status, match_status_name,
+             home_score_90, away_score_90, result_90,
+             half_score, full_score_90, result_source, result_updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(match_id) DO UPDATE SET
+            match_num=excluded.match_num,
+            league_id=excluded.league_id,
+            league_name=excluded.league_name,
+            home_team_id=excluded.home_team_id,
+            away_team_id=excluded.away_team_id,
+            home_team_name=excluded.home_team_name,
+            away_team_name=excluded.away_team_name,
+            match_time=excluded.match_time,
+            match_status=excluded.match_status,
+            match_status_name=excluded.match_status_name,
+            home_score_90=excluded.home_score_90,
+            away_score_90=excluded.away_score_90,
+            result_90=excluded.result_90,
+            half_score=excluded.half_score,
+            full_score_90=excluded.full_score_90,
+            result_source=excluded.result_source,
+            result_updated_at=excluded.result_updated_at,
+            updated_at=datetime('now','localtime')
+        """,
+        (
+            r["match_id"], r.get("match_num"), r.get("league_id"),
+            r.get("league_name"), r.get("home_team_id"), r.get("away_team_id"),
+            r.get("home_team_name"), r.get("away_team_name"),
+            r.get("match_time"), r.get("match_status"), r.get("match_status_name"),
+            r.get("home_score_90"), r.get("away_score_90"), r.get("result_90"),
+            r.get("half_score"), r.get("full_score_90"),
+            r.get("result_source", "sporttery_zqsj"), now,
+        ),
+    )
+    conn.commit()
+
+
+def save_match_results(conn: Connection, results: list[dict]) -> int:
+    """UPSERT multiple match results. Returns count."""
+    for result in results:
+        save_match_result(conn, result)
+    return len(results)
+
+
 # SP snapshot
 
 def save_sp_snapshots(conn: Connection, records: list[dict]) -> int:
@@ -288,3 +350,20 @@ def fetch_latest_sp_snapshots(
 def _fetch_dicts(cur) -> list[dict]:
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _ensure_match_result_columns(conn: Connection) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(sporttery_match)").fetchall()
+    }
+    columns = {
+        "match_status_name": "TEXT NULL",
+        "half_score": "TEXT NULL",
+        "full_score_90": "TEXT NULL",
+        "result_source": "TEXT NULL",
+        "result_updated_at": "TEXT NULL",
+    }
+    for name, ddl in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE sporttery_match ADD COLUMN {name} {ddl}")
