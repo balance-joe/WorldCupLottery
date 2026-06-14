@@ -18,6 +18,7 @@ This skill records money tracking and ticket decisions only. It does not place b
    - Required per selection: match id or match number/team pair, play type, option, selected SP.
    - If SP is missing, look up the latest stored SP in `sporttery_sp_snapshot` before recording.
    - If `sp_snapshot_id` is missing, the script/database layer will try to resolve it from `match_id + play_type + option_code + sp_snapshot_time`.
+   - By default, only record World Cup tickets for this project. If the user explicitly asks to record another league, include that league in the ticket notes.
 2. Use the existing ledger schema:
    - `betting_ticket`: one row per physical/logical ticket.
    - `betting_ticket_selection`: one row per leg/selection.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "复盘竞彩足球结果"
+  short_description: "按赛前 SP 结构复盘已中奖或亏损票，区分结构命中和结果命中。"
+  default_prompt: "复盘这张竞彩足球票为什么中/没中："

@@ -55,6 +55,10 @@ def evaluate_leg(selection: dict, match: dict) -> tuple[str, str]:
         actual = "7" if total >= 7 else str(total)
         return ("hit" if option_code == actual else "miss"), actual
 
+    if play_type == "crs":
+        actual = f"{home_score}:{away_score}"
+        return ("hit" if option_code == actual else "miss"), actual
+
     return "unsupported", str(play_type or "")
 
 

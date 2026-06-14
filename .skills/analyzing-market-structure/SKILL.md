@@ -46,6 +46,13 @@ Always check:
 5. volatility
 6. multi-window consistency
 7. research priority
+8. external model alignment from `http://43.137.46.40:8000/` when reachable
+
+For post-match review, also check:
+
+9. Whether other same-match play types gave a stronger contradictory signal.
+10. Whether the winning selection was the strongest pre-match structure or only one plausible path.
+11. Whether the chosen play type matched the ticket role: core structure ticket vs small-stake experiment.
 
 ## hhad Missing Is Not hhad Rejection
 
@@ -79,6 +86,30 @@ Never say hhad missing means hhad does not support big win.
   “平局风险增强，不适合胜负双选。”
 - Popular favorite overheated:
   “热门方向可能过热，主胜性价比下降，需警惕小胜、不穿或平局风险。”
+
+## Cross-Play Sanity Checks
+
+- A win selection is cleaner when had direction and hhad direction both strengthen in the same team direction.
+- A total-goals selection is cleaner when the chosen goal bucket strengthens and adjacent buckets support the same low/mid/high-goal story.
+- A score selection is cleaner when:
+  - its total goals agree with ttg structure, and
+  - its result margin agrees with had/hhad structure.
+- If ttg supports 2 goals but hhad supports home -1 draw, 2:0 and 1:1 have different structural stories. Do not treat them as equivalent.
+- If a score selection wins while had/hhad point elsewhere, label it as high-variance rather than a core structure hit.
+- If a match is D priority or mixed/noisy across windows, a winning ticket should remain categorized as noisy unless there was a specific play-type signal.
+
+## External Model Alignment
+
+When the external World Cup prediction site is available:
+
+- Use it after, not before, SP structure analysis.
+- Compare result direction, expected goals, top scorelines, and over/under profile.
+- Promote confidence only when SP structure and external model both support the same story.
+- Downgrade if the external model highlights a materially different story, such as:
+  - SP favors a favorite, but external model shows near-even teams.
+  - SP supports a low-goal score, but external model expects high goals.
+  - SP supports a scoreline whose result/margin conflicts with model top scores.
+- Keep the final language as market structure, not true probability.
 
 ## Data Completeness and Priority
 
