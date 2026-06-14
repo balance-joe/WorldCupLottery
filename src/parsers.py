@@ -178,6 +178,113 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
                     "snapshot_time": snapshot_time,
                 })
 
+    # ── crs (比分) ────────────────────────────────────────────────────────
+    for item in odds.get("crsList", []):
+        records.extend(parse_crs(item, match_id, single_map))
+
+    # ── hafu (半全场) ─────────────────────────────────────────────────────
+    for item in odds.get("hafuList", []):
+        records.extend(parse_hafu(item, match_id, single_map))
+
+    return records
+
+
+def parse_crs(item: dict, match_id: str, single_map: dict) -> list[dict]:
+    """
+    Extract crs (比分) SP records from a single crsList item.
+
+    Returns flat list of dicts with keys:
+        match_id, play_type, option_code, option_name,
+        sp_value, goal_line, is_single, snapshot_time
+    """
+    records = []
+    snapshot_time = _parse_update_time(item)
+    goal_line = item.get("goalLine", "")
+
+    CRS_NAMES = {
+        "s-1sh": "主胜其他",
+        "s-1sd": "平其他",
+        "s-1sa": "客胜其他",
+    }
+
+    for key, value in item.items():
+        if key in ("updateDate", "updateTime", "goalLine"):
+            continue
+        if key.endswith("f"):
+            continue
+        sp = _safe_decimal(value)
+        if sp is None:
+            continue
+
+        if key in CRS_NAMES:
+            option_name = CRS_NAMES[key]
+        elif key.startswith("s") and len(key) == 6:
+            home = key[1:3].lstrip("0") or "0"
+            away = key[4:6].lstrip("0") or "0"
+            option_name = f"{home}:{away}"
+        else:
+            option_name = key
+
+        records.append({
+            "match_id": match_id,
+            "play_type": "crs",
+            "option_code": key,
+            "option_name": option_name,
+            "sp_value": sp,
+            "goal_line": goal_line or None,
+            "is_single": single_map.get("crs", 0),
+            "snapshot_time": snapshot_time,
+        })
+
+    return records
+
+
+def parse_hafu(item: dict, match_id: str, single_map: dict) -> list[dict]:
+    """
+    Extract hafu (半全场) SP records from a single hafuList item.
+
+    Returns flat list of dicts with keys:
+        match_id, play_type, option_code, option_name,
+        sp_value, goal_line, is_single, snapshot_time
+    """
+    records = []
+    snapshot_time = _parse_update_time(item)
+    goal_line = item.get("goalLine", "")
+
+    HAFU_NAMES = {
+        "hh": "主/主",
+        "hd": "主/平",
+        "ha": "主/客",
+        "dh": "平/主",
+        "dd": "平/平",
+        "da": "平/客",
+        "ah": "客/主",
+        "ad": "客/平",
+        "aa": "客/客",
+    }
+
+    for key, value in item.items():
+        if key in ("updateDate", "updateTime", "goalLine"):
+            continue
+        if key.endswith("f"):
+            continue
+        sp = _safe_decimal(value)
+        if sp is None:
+            continue
+        if key not in HAFU_NAMES:
+            continue
+
+        records.append({
+            "match_id": match_id,
+            "play_type": "hafu",
+            "option_code": key,
+            "option_name": HAFU_NAMES[key],
+            "sp_value": sp,
+            "goal_line": goal_line or None,
+            "is_single": single_map.get("hafu", 0),
+            "snapshot_time": snapshot_time,
+        })
+
     return records
 
 

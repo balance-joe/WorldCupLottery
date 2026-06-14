@@ -311,6 +311,80 @@ def _classify_signals(markets, movement, team_form, historical, status_control) 
             if total_prob > 0.4:
                 structure.append(f"总进球低赔集中在{'/'.join(low)}球({total_prob:.1%})，偏向中低比分结构")
 
+    # ── Crs (比分) ──────────────────────────────────────────────────────
+    crs = markets.get("crs", {})
+    if crs:
+        opts = crs.get("options", [])
+
+        # 1. 低赔比分集中度
+        opts_with_prob = [(o["code"], o.get("current_prob") or 0) for o in opts]
+        opts_with_prob.sort(key=lambda x: -x[1])
+        top_codes = []
+        cumulative = 0
+        for code, prob in opts_with_prob[:5]:
+            top_codes.append(code)
+            cumulative += prob
+            if cumulative > 0.4:
+                break
+        if cumulative > 0.4 and len(top_codes) >= 3:
+            name_map = {o["code"]: o.get("option_name", o["code"]) for o in opts}
+            names = [name_map.get(c, c) for c in top_codes]
+            structure.append(f"比分低赔集中在{'/'.join(names)}({cumulative:.1%})，偏向特定比分结构")
+
+        # 2. 主胜其他 vs 客胜其他
+        opts_dict = {o["code"]: o for o in opts}
+        sh = opts_dict.get("s-1sh", {})
+        sa = opts_dict.get("s-1sa", {})
+        sh_prob = sh.get("current_prob") or 0
+        sa_prob = sa.get("current_prob") or 0
+        if sh_prob > 0 and sa_prob > 0:
+            if sh_prob > sa_prob * 1.5:
+                positive.append("主胜其他概率高于客胜其他，大比分偏向主队")
+            elif sa_prob > sh_prob * 1.5:
+                negative.append("客胜其他概率高于主胜其他，大比分偏向客队")
+
+        # 3. 具体比分 SP 变化
+        sp_changes = []
+        for o in opts:
+            if o.get("sp_change") and o.get("open_sp"):
+                pct = abs(o["sp_change"]) / o["open_sp"]
+                if pct > 0.10:
+                    sp_changes.append((o["code"], o.get("option_name", o["code"]), o["sp_change"], pct))
+        if sp_changes:
+            sp_changes.sort(key=lambda x: -x[3])
+            for code, name, change, pct in sp_changes[:2]:
+                positive.append(f"比分 {name} SP 下降{pct:.1%}，市场预期增强")
+
+    # ── Hafu (半全场) ───────────────────────────────────────────────────
+    hafu = markets.get("hafu", {})
+    if hafu:
+        opts = {o["code"]: o for o in hafu.get("options", [])}
+
+        # 1. 主/主（hh）概率
+        hh = opts.get("hh", {})
+        hh_prob = hh.get("current_prob") or 0
+        if hh_prob > 0.25:
+            positive.append(f"半全场主/主概率{hh_prob:.1%}，支持主队全程领先")
+
+        # 2. 半场平局结构
+        dh_prob = opts.get("dh", {}).get("current_prob") or 0
+        dd_prob = opts.get("dd", {}).get("current_prob") or 0
+        da_prob = opts.get("da", {}).get("current_prob") or 0
+        half_draw = dh_prob + dd_prob + da_prob
+        if half_draw > 0.40:
+            structure.append(f"半场平局概率{half_draw:.1%}，比赛可能前半场胶着")
+
+        # 3. 全场主胜结构
+        ah_prob = opts.get("ah", {}).get("current_prob") or 0
+        full_home = hh_prob + dh_prob + ah_prob
+        if full_home > 0.50:
+            positive.append(f"全场主胜概率{full_home:.1%}，主队获胜预期较强")
+
+        # 4. hafu 与 had 方向一致性
+        had_h = {o["code"]: o for o in had.get("options", [])}.get("H", {})
+        if hh_prob > 0.25 and had_h.get("sp_change", 0) < 0:
+            positive.append("半全场与胜平负方向一致，主队优势明显")
+
     # ── Team form ────────────────────────────────────────────────────────
     home_form = team_form.get("home", {})
     away_form = team_form.get("away", {})
