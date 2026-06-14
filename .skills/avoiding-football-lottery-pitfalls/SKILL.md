@@ -27,6 +27,14 @@ Reject or warn if the analysis contains:
 15. Ignoring late-window reversal.
 16. Overtrusting high-volatility signals.
 17. Using public news to replace SP structure.
+18. Explaining only the winning option after the result is known.
+19. Calling a result hit a structure hit without checking all same-match play types.
+20. Treating exact-score success as reusable without score-market and cross-play confirmation.
+21. Upgrading a noisy C/D priority match after it wins.
+22. Ignoring whether the selected play was a core ticket or a small-stake experiment.
+23. Including non-World-Cup matches in the default ticket slate when the project rule is World Cup only.
+24. Finalizing a World Cup ticket plan without checking the external model site when it is reachable.
+25. Letting the external model override Sporttery SP structure instead of using it as confirmation/contradiction.
 
 ## Forbidden Words
 
@@ -60,6 +68,11 @@ Before output, confirm:
 - Is this framed as market expression?
 - Are risks included?
 - Are conflicts included?
+- Did you check other same-match play types, not only the hit?
+- Did you separate structure hit from result hit?
+- Did you filter to World Cup matches unless the user explicitly asked otherwise?
+- Did you check the external model site and label alignment?
+- Did you avoid treating external model probability as true probability?
 - Is missing data handled correctly?
 - Is late-window reversal handled?
 - Is high volatility handled?
