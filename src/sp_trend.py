@@ -13,7 +13,7 @@ from typing import Any
 
 
 SUPPORTED_PLAY_TYPES = {"had", "hhad", "ttg"}
-WINDOWS = ("open_to_latest", "last_24h", "last_6h", "last_1h")
+WINDOWS = ("open_to_latest", "last_24h", "last_6h")
 CHINA_TZ = timezone(timedelta(hours=8))
 
 TREND_CONFIG = {

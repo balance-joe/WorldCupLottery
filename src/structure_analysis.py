@@ -30,6 +30,10 @@ def analyze_match_windows(
         trend_details[window] = {"had": had, "hhad": hhad, "ttg": ttg}
         structures[window] = analyze_market_structure(match_id, window, had, hhad, ttg)
 
+    # CRS/HAFU: 数据采集，不参与趋势分析
+    crs_snapshot = _extract_crs_snapshot(match_id, sp_history)
+    hafu_snapshot = _extract_hafu_snapshot(match_id, sp_history)
+
     debug_payload = None
     if include_debug:
         debug_payload = {
@@ -49,6 +53,8 @@ def analyze_match_windows(
         non_sp_blend_summary=blend_summary,
     )
     llm_package["final_research_priority"] = blended_priority
+    llm_package["crs_snapshot"] = crs_snapshot
+    llm_package["hafu_snapshot"] = hafu_snapshot
     return {
         "match": llm_package["match"],
         "market_structures": {window: structure.to_dict() for window, structure in structures.items()},
@@ -57,6 +63,8 @@ def analyze_match_windows(
         "final_research_priority": blended_priority,
         "non_sp_evidence": non_sp_evidence,
         "non_sp_blend_summary": blend_summary,
+        "crs_snapshot": crs_snapshot,
+        "hafu_snapshot": hafu_snapshot,
         "llm_input": llm_package,
         "debug_trend_details": debug_payload,
     }
@@ -110,7 +118,7 @@ def _blend_research_priority(
 
 
 def _derive_sp_lean(structures: dict[str, MarketStructure]) -> str:
-    for window in ("open_to_latest", "last_24h", "last_6h", "last_1h"):
+    for window in ("open_to_latest", "last_24h", "last_6h"):
         structure = structures.get(window)
         if not structure or not structure.available:
             continue
@@ -132,3 +140,82 @@ def _shift_priority(priority: str, offset: int) -> str:
     except ValueError:
         return priority
     return order[max(0, min(len(order) - 1, index + offset))]
+
+
+def _extract_crs_snapshot(match_id: str, sp_history: list[dict]) -> dict[str, Any] | None:
+    """提取 CRS 最新快照：低赔集中度、主/客胜其他对比。"""
+    records = [r for r in sp_history
+               if str(r.get("match_id")) == match_id and r.get("play_type") == "crs"]
+    if not records:
+        return None
+
+    latest_time = max(str(r.get("snapshot_time", "")) for r in records)
+    latest = [r for r in records if str(r.get("snapshot_time", "")) == latest_time]
+    if not latest:
+        return None
+
+    scored = []
+    for r in latest:
+        prob = r.get("implied_prob_norm") or 0
+        scored.append({"code": r["option_code"], "name": r.get("option_name", ""), "prob": prob, "sp": r["sp_value"]})
+    scored.sort(key=lambda x: -x["prob"])
+
+    # 低赔集中度
+    top_codes = []
+    cumulative = 0.0
+    for item in scored:
+        top_codes.append(item)
+        cumulative += item["prob"]
+        if cumulative > 0.3:
+            break
+
+    # 主胜其他 vs 客胜其他
+    opts_dict = {item["code"]: item for item in scored}
+    sh_prob = opts_dict.get("s-1sh", {}).get("prob", 0)
+    sa_prob = opts_dict.get("s-1sa", {}).get("prob", 0)
+    other_comparison = None
+    if sh_prob > 0 and sa_prob > 0:
+        if sh_prob > sa_prob * 1.5:
+            other_comparison = "home_dominant"
+        elif sa_prob > sh_prob * 1.5:
+            other_comparison = "away_dominant"
+        else:
+            other_comparison = "balanced"
+
+    return {
+        "snapshot_time": latest_time,
+        "top_scores": top_codes,
+        "top_scores_cumulative_prob": round(cumulative, 4),
+        "other_score_comparison": other_comparison,
+        "home_other_prob": sh_prob,
+        "away_other_prob": sa_prob,
+        "total_options": len(scored),
+    }
+
+
+def _extract_hafu_snapshot(match_id: str, sp_history: list[dict]) -> dict[str, Any] | None:
+    """提取 HAFU 最新快照：全场主/客胜概率、半场平局概率。"""
+    records = [r for r in sp_history
+               if str(r.get("match_id")) == match_id and r.get("play_type") == "hafu"]
+    if not records:
+        return None
+
+    latest_time = max(str(r.get("snapshot_time", "")) for r in records)
+    latest = {r["option_code"]: r for r in records if str(r.get("snapshot_time", "")) == latest_time}
+    if not latest:
+        return None
+
+    def _prob(code: str) -> float:
+        return latest.get(code, {}).get("implied_prob_norm") or 0
+
+    full_home = _prob("hh") + _prob("dh") + _prob("ah")
+    full_away = _prob("ha") + _prob("da") + _prob("aa")
+    half_draw = _prob("dh") + _prob("dd") + _prob("da")
+
+    return {
+        "snapshot_time": latest_time,
+        "full_home_prob": round(full_home, 4),
+        "full_away_prob": round(full_away, 4),
+        "half_draw_prob": round(half_draw, 4),
+        "options": {code: round(_prob(code), 4) for code in ("hh", "hd", "ha", "dh", "dd", "da", "ah", "ad", "aa")},
+    }

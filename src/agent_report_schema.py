@@ -69,7 +69,7 @@ def build_agent_report_package(
 
 def build_cross_window_summary(window_structures: dict[str, MarketStructure]) -> dict[str, str]:
     long_term = window_structures.get("open_to_latest")
-    recent = window_structures.get("last_1h") or window_structures.get("last_6h")
+    recent = window_structures.get("last_6h")
     medium = window_structures.get("last_6h") or window_structures.get("last_24h")
 
     long_text = _direction_text(long_term, "开售至今")
@@ -153,7 +153,7 @@ def _same_expression(left: MarketStructure, right: MarketStructure) -> bool:
 
 
 def _first_handicap_line(window_structures: dict[str, MarketStructure]) -> str | None:
-    for window in ("open_to_latest", "last_24h", "last_6h", "last_1h"):
+    for window in ("open_to_latest", "last_24h", "last_6h"):
         structure = window_structures.get(window)
         if structure and structure.handicap_line is not None:
             return structure.handicap_line

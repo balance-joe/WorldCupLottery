@@ -31,7 +31,7 @@ def build_market_structure_llm_package(
     result = analyze_match_windows(
         match_info,
         sp_history,
-        windows=tuple(windows) if windows else ("open_to_latest", "last_24h", "last_6h", "last_1h"),
+        windows=tuple(windows) if windows else ("open_to_latest", "last_24h", "last_6h"),
         include_debug=debug,
     )
     return result["llm_input"]

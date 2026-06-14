@@ -115,7 +115,7 @@ class CrossWindowSummaryTest(unittest.TestCase):
     def test_consistent_expressions(self):
         structures = {
             "open_to_latest": _structure("open_to_latest", "home_small_win_supported", "A"),
-            "last_1h": _structure("last_1h", "home_small_win_supported", "A"),
+            "last_6h": _structure("last_6h", "home_small_win_supported", "A"),
         }
         summary = build_cross_window_summary(structures)
         self.assertIn("一致", summary["tempo_reading"])
@@ -123,7 +123,7 @@ class CrossWindowSummaryTest(unittest.TestCase):
     def test_long_term_mixed_recent_clear(self):
         structures = {
             "open_to_latest": _structure("open_to_latest", "mixed_or_noisy", "C"),
-            "last_1h": _structure("last_1h", "home_big_win_supported", "A"),
+            "last_6h": _structure("last_6h", "home_big_win_supported", "A"),
         }
         summary = build_cross_window_summary(structures)
         self.assertIn("临场", summary["tempo_reading"])
