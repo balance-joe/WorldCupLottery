@@ -35,6 +35,43 @@ class SettlementRulesTest(unittest.TestCase):
         )
         self.assertEqual((status, actual), ("pending", ""))
 
+    def test_crs_hit(self):
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s02s01"},
+            {"home_score_90": 2, "away_score_90": 1},
+        )
+        self.assertEqual((status, actual), ("hit", "s02s01"))
+
+    def test_crs_miss(self):
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s01s00"},
+            {"home_score_90": 2, "away_score_90": 1},
+        )
+        self.assertEqual(status, "miss")
+        self.assertEqual(actual, "s02s01")
+
+    def test_hafu_hit(self):
+        status, actual = evaluate_leg(
+            {"play_type": "hafu", "option_code": "hh"},
+            {"home_score_90": 2, "away_score_90": 1, "half_score": "1:0"},
+        )
+        self.assertEqual((status, actual), ("hit", "hh"))
+
+    def test_hafu_miss(self):
+        status, actual = evaluate_leg(
+            {"play_type": "hafu", "option_code": "dh"},
+            {"home_score_90": 2, "away_score_90": 1, "half_score": "1:0"},
+        )
+        self.assertEqual(status, "miss")
+        self.assertEqual(actual, "hh")
+
+    def test_hafu_unsupported_without_half_score(self):
+        status, actual = evaluate_leg(
+            {"play_type": "hafu", "option_code": "hh"},
+            {"home_score_90": 2, "away_score_90": 1, "half_score": None},
+        )
+        self.assertEqual((status, actual), ("unsupported", "missing_half_score"))
+
 
 class _DBTestBase(unittest.TestCase):
     def setUp(self):

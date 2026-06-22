@@ -52,8 +52,24 @@ python -m scripts.analyze_match_structure --match-id 2040162 --with-detail --fet
 python -m scripts.analyze_today_matches
 python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-detail
 
+# 逐票复盘（按下单时点回看信号）
+python -m scripts.analyze_tickets
+python -m scripts.analyze_tickets --detail
+
+# 策略回测（带推荐门禁）
+python -m scripts.backtest_strategies
+python -m scripts.backtest_strategies --detail
+
+# 全玩法信号回测（研究用途）
+python -m scripts.backtest_sp_signals
+python -m scripts.backtest_all_playtypes
+
 # 单场抓取非SP详情证据
 python -m scripts.fetch_match_details --match-id 2040162 --output data/match_2040162_detail.json
+
+# 可选：抓取外部预测源并和 SP/赛果做对比
+python -m scripts.fetch_predictions --detail
+python -m scripts.analyze_predictions --detail
 
 ```
 
@@ -127,7 +143,13 @@ football/
 │   ├── fetch_sporttery.py      # 赛程/SP 抓取入口
 │   ├── fetch_results.py        # 赛果回填入口
 │   ├── analyze_match_structure.py # 单场结构分析
-│   └── analyze_today_matches.py   # 比赛快速筛选
+│   ├── analyze_today_matches.py   # 比赛快速筛选 + 推荐门禁 + 候选玩法
+│   ├── analyze_tickets.py         # 逐票复盘（按下单时点）
+│   ├── backtest_strategies.py     # 规则化策略回测
+│   ├── backtest_sp_signals.py     # 全玩法信号回测
+│   ├── backtest_all_playtypes.py  # 全玩法临场单信号回测
+│   ├── fetch_predictions.py       # 可选外部预测源抓取
+│   └── analyze_predictions.py     # 外部预测源 vs SP/赛果对比
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                # API 地址、请求头、DB 连接
@@ -137,6 +159,7 @@ football/
 │   ├── sp_movement.py           # SP 变化计算
 │   ├── sp_trend.py              # SP 趋势结构化分析
 │   ├── market_structure.py      # 跨玩法市场结构判断
+│   ├── recommendation.py        # 推荐门禁 + HAD/TTG/CRS 候选生成
 │   ├── agent_report_schema.py   # LLM 结构化输入包
 │   ├── structure_analysis.py    # 分析编排
 │   ├── db.py                    # SQLite 数据库
@@ -160,6 +183,8 @@ football/
 | `sporttery_match` | 比赛主表 | 26 |
 | `sporttery_sp_snapshot` | SP 时间序列 + 隐含概率 | 483 |
 | `sporttery_market_analysis` | SP 趋势/市场结构分析快照 | 0+ |
+| `betting_ticket` | 手工票台账（含 `source_type`） | 0+ |
+| `betting_ticket_selection` | 票内每条选择 | 0+ |
 
 ### 连接方式
 
@@ -312,6 +337,31 @@ python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-
 
 `--save` 会写入 `sporttery_market_analysis`，用于保存赛前每次结构分析，便于后续复盘。
 
+### 推荐门禁与候选玩法
+
+项目现在把“读盘”和“出票建议”拆开：
+
+- `market_structure` 负责描述市场表达
+- `recommendation` 负责判断是否可买，并生成候选玩法
+
+当前门禁规则：
+
+- 只允许 `A/B` 优先级进入候选池
+- `had/hhad/ttg` 至少要有 2 笔快照才能作为推荐依据
+- 高冲突盘会拦截 `had/hhad/crs`
+- `had` 不足时，不推荐 `crs`
+- 输出的候选分为：
+  - `had_options`
+  - `ttg_options`
+  - `crs_options`
+
+`scripts.analyze_today_matches` 会直接打印：
+
+- `可买:Y/N`
+- `玩法: had,hhad,ttg,crs`
+- `候选:HAD=... TTG=... CRS=...`
+- `门禁: ...`
+
 ### 非 SP 证据层
 
 除 SP 市场表达外，项目现在还支持接入 detail APIs 形成第二层证据：
@@ -364,6 +414,41 @@ python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-
 - 串关至少 2 场，`N` 必须等于选择的比赛场数。
 - 同一张票里同一场比赛只能出现一次，避免同场不同玩法或重复选择混入串关。
 - 金额按 `注数 * 2元 * 倍数` 计算；复式选项会增加注数，例如 1 场选 `H/D`、另一场选 `A`，`2x1` 为 2 注。
+
+## 票据台账与复盘
+
+`betting_ticket.source_type` 用来区分票的来源，避免把系统票和人工赔率票混为一谈。
+
+当前约定值：
+
+- `SYSTEM`：按系统建议形成的票
+- `USER_ODDS_ONLY`：只按赔率/个人直觉形成的票
+- `USER_MODIFIED`：参考系统后人工改过的票
+- `USER_ACTUAL`：用户实际购买，但不一定来自系统
+- `UNKNOWN`：历史老票，来源未补标
+
+逐票复盘脚本：
+
+```bash
+python -m scripts.analyze_tickets
+python -m scripts.analyze_tickets --detail
+```
+
+复盘口径：
+
+- 优先按 `betting_ticket_selection.sp_snapshot_time`
+- 否则回退到 `betting_ticket.placed_at`
+- 只分析该时间点之前已经存在的 SP 快照，避免赛后信息泄漏
+
+## 可选外部预测源
+
+项目支持抓取一个外部预测站点的数据，落库到 `pred_match / pred_score_matrix`，用于和 SP 结构做对比。
+
+注意：
+
+- 这是可选研究数据源，不是本项目的真值来源
+- 不能替代中国体育彩票竞彩足球规则和 SP 结构本身
+- 相关脚本只用于对比、校验、发现偏差，不应直接当成出票信号
 
 ---
 

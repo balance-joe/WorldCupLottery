@@ -11,6 +11,7 @@ from pathlib import Path
 from src.sp_movement import latest_records
 
 _SQLITE_PATH = Path(__file__).resolve().parent.parent / "data" / "sporttery.db"
+SOURCE_TYPES = frozenset({"SYSTEM", "USER_ODDS_ONLY", "USER_MODIFIED", "USER_ACTUAL", "UNKNOWN"})
 
 
 # DDL
@@ -135,6 +136,7 @@ DDL_BETTING_TICKET = """
 CREATE TABLE IF NOT EXISTS betting_ticket (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bet_group TEXT NULL,
+    source_type TEXT NOT NULL DEFAULT 'UNKNOWN',
     ticket_label TEXT NOT NULL,
     pass_type TEXT NOT NULL,
     stake_amount REAL NOT NULL,
@@ -188,6 +190,13 @@ class Connection:
         self._conn = sqlite3.connect(str(_SQLITE_PATH))
         self._conn.row_factory = sqlite3.Row
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def cursor(self):
         return self._conn.cursor()
 
@@ -233,6 +242,7 @@ def ensure_tables(conn: Connection | None = None) -> None:
         conn.execute(DDL_BETTING_TICKET_SELECTION)
         _ensure_match_result_columns(conn)
         _ensure_raw_snapshot_version_column(conn)
+        _ensure_betting_ticket_columns(conn)
         _ensure_betting_selection_columns(conn)
         conn.commit()
     finally:
@@ -324,7 +334,7 @@ def save_api_error(
 # Match
 
 def save_match(conn: Connection, match: dict) -> None:
-    """UPSERT a match record."""
+    """UPSERT a match record (does NOT commit — caller is responsible)."""
     m = dict(match)
     if m.get("match_time") and hasattr(m["match_time"], "strftime"):
         m["match_time"] = m["match_time"].strftime("%Y-%m-%d %H:%M:%S")
@@ -350,18 +360,18 @@ def save_match(conn: Connection, match: dict) -> None:
             m.get("match_time"), m.get("match_status"),
         ),
     )
-    conn.commit()
 
 
 def save_matches(conn: Connection, matches: list[dict]) -> int:
-    """UPSERT multiple match records. Returns count."""
+    """UPSERT multiple match records with a single commit. Returns count."""
     for m in matches:
         save_match(conn, m)
+    conn.commit()
     return len(matches)
 
 
 def save_match_result(conn: Connection, result: dict) -> None:
-    """UPSERT one match result from Sporttery football data."""
+    """UPSERT one match result (does NOT commit — caller is responsible)."""
     r = dict(result)
     if r.get("match_time") and hasattr(r["match_time"], "strftime"):
         r["match_time"] = r["match_time"].strftime("%Y-%m-%d %H:%M:%S")
@@ -406,13 +416,13 @@ def save_match_result(conn: Connection, result: dict) -> None:
             r.get("result_source", "sporttery_zqsj"), now,
         ),
     )
-    conn.commit()
 
 
 def save_match_results(conn: Connection, results: list[dict]) -> int:
-    """UPSERT multiple match results. Returns count."""
+    """UPSERT multiple match results with a single commit. Returns count."""
     for result in results:
         save_match_result(conn, result)
+    conn.commit()
     return len(results)
 
 
@@ -603,16 +613,18 @@ def save_betting_ticket(conn: Connection, ticket: dict) -> int:
         raise ValueError("ticket selections are required")
 
     placed_at = ticket.get("placed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    source_type = _normalize_source_type(ticket.get("source_type"))
     cur = conn.execute(
         """
         INSERT INTO betting_ticket
-            (bet_group, ticket_label, pass_type, stake_amount, unit_stake,
+            (bet_group, source_type, ticket_label, pass_type, stake_amount, unit_stake,
              multiplier, ticket_status, expected_min_payout, expected_max_payout,
              actual_payout, profit_loss, placed_at, settled_at, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             ticket.get("bet_group"),
+            source_type,
             ticket["ticket_label"],
             ticket["pass_type"],
             ticket["stake_amount"],
@@ -739,6 +751,27 @@ def _ensure_betting_selection_columns(conn: Connection) -> None:
         conn.execute("ALTER TABLE betting_ticket_selection ADD COLUMN sp_snapshot_id INTEGER NULL")
 
 
+def _ensure_betting_ticket_columns(conn: Connection) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(betting_ticket)").fetchall()
+    }
+    if "source_type" not in existing:
+        conn.execute("ALTER TABLE betting_ticket ADD COLUMN source_type TEXT NULL")
+    conn.execute(
+        "UPDATE betting_ticket SET source_type = COALESCE(source_type, 'UNKNOWN') "
+        "WHERE source_type IS NULL OR source_type = ''"
+    )
+    for raw_value in conn.execute("SELECT DISTINCT source_type FROM betting_ticket").fetchall():
+        value = raw_value[0]
+        normalized = _normalize_source_type(value)
+        if value != normalized:
+            conn.execute(
+                "UPDATE betting_ticket SET source_type = ? WHERE source_type = ?",
+                (normalized, value),
+            )
+
+
 _sp_hash_column_checked = False
 
 
@@ -754,3 +787,16 @@ def _ensure_sp_snapshot_hash_column(conn: Connection) -> None:
     if "content_hash" not in existing:
         conn.execute("ALTER TABLE sporttery_sp_snapshot ADD COLUMN content_hash TEXT NULL")
     _sp_hash_column_checked = True
+
+
+def _normalize_source_type(value: str | None) -> str:
+    if value is None:
+        return "SYSTEM"
+    normalized = str(value).strip().upper()
+    if not normalized:
+        return "UNKNOWN"
+    if normalized not in SOURCE_TYPES:
+        raise ValueError(
+            f"unsupported source_type={value!r}; allowed={sorted(SOURCE_TYPES)}"
+        )
+    return normalized

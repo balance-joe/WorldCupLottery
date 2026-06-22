@@ -30,6 +30,7 @@ def main():
     from src import api_client
     from src import db
     from src.market_structure import PRIORITY_RANK
+    from src.recommendation import build_match_recommendation
     from src.sp_trend import WINDOWS
     from src.structure_analysis import analyze_match_windows
 
@@ -67,6 +68,7 @@ def main():
                 detail_bundle=detail_bundle,
             )
             structure = result["market_structures"][args.window]
+            recommendation = build_match_recommendation(match, sp_history, window=args.window)
             rows.append({
                 "match_num": match.get("match_num") or "",
                 "league": match.get("league_name") or "",
@@ -85,6 +87,12 @@ def main():
                 "support_confidence": (result.get("non_sp_evidence") or {}).get("support_confidence", "-"),
                 "blend_reason": (result.get("non_sp_blend_summary") or {}).get("reason", "-"),
                 "detail_errors": detail_error_count,
+                "gate_allowed": recommendation.gate.allowed,
+                "allowed_plays": ",".join(recommendation.gate.allowed_plays) or "-",
+                "gate_reasons": ",".join(recommendation.gate.reasons) or "-",
+                "had_options": ",".join(recommendation.candidates.had_options) or "-",
+                "ttg_options": ",".join(recommendation.candidates.ttg_options) or "-",
+                "crs_options": ",".join(recommendation.candidates.crs_options) or "-",
             })
 
         rows.sort(key=lambda row: (PRIORITY_RANK.get(row["final_research_priority"], 9), row["match_time"]))
@@ -97,7 +105,10 @@ def main():
                 f"市场表达:{row['main_market_expression']} "
                 f"胜平负:{row['had_direction']} 让球:{row['hhad_direction']} 总进球:{row['ttg_direction']} "
                 f"风险:{row['top_risk_flags'] or '-'} 关注:{row['suggested_focus'] or '-'} "
-                f"非SP:{row['non_sp_lean']}/{row['support_confidence']} 校正:{row['blend_reason']}"
+                f"非SP:{row['non_sp_lean']}/{row['support_confidence']} 校正:{row['blend_reason']} "
+                f"可买:{'Y' if row['gate_allowed'] else 'N'} 玩法:{row['allowed_plays']} "
+                f"候选:HAD={row['had_options']} TTG={row['ttg_options']} CRS={row['crs_options']} "
+                f"门禁:{row['gate_reasons']}"
             )
     finally:
         conn.close()

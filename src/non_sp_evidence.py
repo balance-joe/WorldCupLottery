@@ -397,11 +397,13 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _pct_value(value: Any) -> float:
+    """Parse a percentage string (e.g. '60' or '60%') and clamp to [0, 100]."""
     text = str(value).strip().replace("%", "")
     try:
-        return float(text)
+        v = float(text)
     except ValueError:
         return 0.0
+    return max(0.0, min(100.0, v))
 
 
 def _coalesce(*values: Any) -> Any:

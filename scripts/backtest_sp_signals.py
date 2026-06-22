@@ -62,7 +62,7 @@ def _hhad_actual(home: int, away: int, goal_line: str | None) -> str | None:
     if goal_line is None:
         return None
     try:
-        adjusted = home + int(goal_line)
+        adjusted = home + float(goal_line)
     except (ValueError, TypeError):
         return None
     if adjusted > away:
@@ -241,6 +241,8 @@ def backtest(conn, *, detail: bool = False) -> dict:
     print(f"回测结果: {len(results)} 场比赛")
     print(f"{'=' * 60}")
 
+    _SMALL_SAMPLE_THRESHOLD = 20
+
     for label, key in [
         ("HAD 胜平负", "had"),
         ("HHAD 让球胜平负", "hhad"),
@@ -252,7 +254,9 @@ def backtest(conn, *, detail: bool = False) -> dict:
         total = s.get("total", 0)
         hits = s.get("hits", 0)
         if total:
-            print(f"  {label}: {hits}/{total} = {hits/total:.1%}")
+            rate = hits / total
+            warn = " ⚠ 样本量不足，命中率仅供参考" if total < _SMALL_SAMPLE_THRESHOLD else ""
+            print(f"  {label}: {hits}/{total} = {rate:.1%}{warn}")
 
     if detail:
         print(f"\n{'─' * 80}")

@@ -220,6 +220,7 @@ class BettingLedgerTest(_DBTestBase):
 
         ticket_id = db_mod.save_betting_ticket(self.conn, {
             "bet_group": "plan-1",
+            "source_type": "SYSTEM",
             "ticket_label": "墨西哥胜 × 美国胜",
             "pass_type": "2x1",
             "stake_amount": 20,
@@ -255,6 +256,7 @@ class BettingLedgerTest(_DBTestBase):
         self.assertEqual(len(tickets), 1)
         self.assertEqual(tickets[0]["ticket_status"], "pending")
         self.assertEqual(tickets[0]["expected_max_payout"], 45.36)
+        self.assertEqual(tickets[0]["source_type"], "SYSTEM")
 
         selection_count = self.conn.execute(
             "SELECT COUNT(*) FROM betting_ticket_selection WHERE ticket_id = ?",
@@ -271,6 +273,36 @@ class BettingLedgerTest(_DBTestBase):
             (ticket_id, "2040162", "H"),
         ).fetchone()
         self.assertEqual(linked_selection["sp_snapshot_id"], sp_row["id"])
+
+    def test_existing_rows_default_source_type_to_unknown(self):
+        self.conn.execute(
+            """
+            INSERT INTO betting_ticket
+                (bet_group, ticket_label, pass_type, stake_amount, placed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("legacy", "老票", "single", 2, "2026-06-11 15:00:00"),
+        )
+        self.conn.commit()
+
+        tickets = db_mod.fetch_betting_tickets(self.conn, "legacy")
+        self.assertEqual(tickets[0]["source_type"], "UNKNOWN")
+
+    def test_save_ticket_rejects_unknown_source_type(self):
+        with self.assertRaises(ValueError):
+            db_mod.save_betting_ticket(self.conn, {
+                "bet_group": "plan-1",
+                "source_type": "mystery",
+                "ticket_label": "非法来源",
+                "pass_type": "single",
+                "stake_amount": 2,
+                "selections": [{
+                    "match_id": "1",
+                    "play_type": "had",
+                    "option_code": "H",
+                    "selected_sp": 1.5,
+                }],
+            })
 
 
 if __name__ == "__main__":

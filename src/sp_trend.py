@@ -13,7 +13,7 @@ from typing import Any
 
 
 SUPPORTED_PLAY_TYPES = {"had", "hhad", "ttg"}
-WINDOWS = ("open_to_latest", "last_24h", "last_6h")
+WINDOWS = ("open_to_latest", "last_24h", "last_6h", "last_1h")
 CHINA_TZ = timezone(timedelta(hours=8))
 
 TREND_CONFIG = {
@@ -330,6 +330,9 @@ def _hhad_direction(options: list[TrendOption], gap: float, confidence: str) -> 
 
 def _ttg_direction(options: list[TrendOption]) -> tuple[str, str, float, dict[str, float]]:
     deltas = {option.option_code: option.normalized_weight_delta for option in options}
+    # Note: "2" is intentionally shared between low_goals and mid_goals —
+    # it sits on the boundary and its weight shift contributes to both groups,
+    # making the analysis more sensitive to marginal moves around 2 goals.
     groups = {
         "low_goals": sum(deltas.get(code, 0.0) for code in ("0", "1", "2")),
         "mid_goals": sum(deltas.get(code, 0.0) for code in ("2", "3")),

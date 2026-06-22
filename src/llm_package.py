@@ -10,8 +10,6 @@ Output format designed for LLM consumption:
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from src.structure_analysis import analyze_match_windows
 
 
@@ -31,7 +29,7 @@ def build_market_structure_llm_package(
     result = analyze_match_windows(
         match_info,
         sp_history,
-        windows=tuple(windows) if windows else ("open_to_latest", "last_24h", "last_6h"),
+        windows=tuple(windows) if windows else ("open_to_latest", "last_24h", "last_6h", "last_1h"),
         include_debug=debug,
     )
     return result["llm_input"]
@@ -47,222 +45,10 @@ def build_llm_package(
     return build_market_structure_llm_package(match_info, sp_history)
 
 
-# ── Internal builders ───────────────────────────────────────────────────────
-
-
-def _classify_phase(hours: float | None, status: str | None) -> str:
-    """Classify match phase by hours to kickoff (pure time dimension)."""
-    if status == "4" or (hours is not None and hours < 0):
-        return "closed_or_result"
-    if hours is None:
-        return "unknown"
-    if hours > 24:
-        return "early_pre_match"
-    if hours > 3:
-        return "pre_match"
-    return "late_pre_match"
-
-
-def _build_market(play_type: str, records: list[dict]) -> dict:
-    """Build market summary with history and movement."""
-    # Group by snapshot_time
-    snapshots: dict[str, list[dict]] = {}
-    for r in records:
-        t = r.get("snapshot_time", "")
-        snapshots.setdefault(t, []).append(r)
-
-    times = sorted(snapshots.keys())
-    if not times:
-        return {}
-
-    # First and last snapshot
-    first_snap = {r["option_code"]: r for r in snapshots[times[0]]}
-    last_snap = {r["option_code"]: r for r in snapshots[times[-1]]}
-
-    goal_line = None
-    options = []
-    for code in sorted(last_snap.keys()):
-        r = last_snap[code]
-        first_r = first_snap.get(code, {})
-
-        sp_change = None
-        prob_change = None
-        if first_r and first_r.get("sp_value"):
-            sp_change = round(r["sp_value"] - first_r["sp_value"], 4)
-            if first_r.get("implied_prob_norm") and r.get("implied_prob_norm"):
-                prob_change = round(r["implied_prob_norm"] - first_r["implied_prob_norm"], 4)
-
-        options.append({
-            "code": code,
-            "name": r.get("option_name", code),
-            "current_sp": r["sp_value"],
-            "current_prob": r.get("implied_prob_norm"),
-            "open_sp": first_r.get("sp_value"),
-            "open_prob": first_r.get("implied_prob_norm"),
-            "sp_change": sp_change,
-            "prob_change": prob_change,
-            "snapshot_count": len([s for s in snapshots.values() if any(x["option_code"] == code for x in s)]),
-        })
-
-        if r.get("goal_line"):
-            goal_line = r["goal_line"]
-
-    # Low price options for ttg
-    low_price = []
-    if play_type == "ttg":
-        opts_with_prob = [(o["code"], o["current_prob"] or 0) for o in options]
-        opts_with_prob.sort(key=lambda x: -x[1])
-        cumulative = 0
-        for code, prob in opts_with_prob:
-            low_price.append(code)
-            cumulative += prob
-            if cumulative >= 0.45:
-                break
-
-    return {
-        "play_type": play_type,
-        "goal_line": goal_line,
-        "snapshot_times": times,
-        "snapshot_count": len(times),
-        "options": options,
-        "low_price_options": low_price if play_type == "ttg" else None,
-    }
-
-
-def _build_movement(opt: dict) -> dict:
-    """Build movement profile for a single option."""
-    sp_change = opt.get("sp_change") or 0
-    prob_change = opt.get("prob_change") or 0
-
-    if abs(sp_change) < 0.05:
-        pattern = "stable"
-        volatility = "low"
-    elif abs(sp_change) < 0.2:
-        pattern = "gradual"
-        volatility = "low"
-    elif abs(sp_change) < 0.5:
-        pattern = "moderate"
-        volatility = "medium"
-    else:
-        pattern = "sharp"
-        volatility = "high"
-
-    direction = "down" if sp_change < 0 else "up" if sp_change > 0 else "flat"
-
-    return {
-        "direction": direction,
-        "pattern": pattern,
-        "volatility": volatility,
-        "sp_change": sp_change,
-        "sp_change_pct": round(sp_change / opt["open_sp"], 4) if opt.get("open_sp") else None,
-        "prob_change": prob_change,
-        "snapshot_count": opt.get("snapshot_count", 0),
-    }
-
-
-def _build_team_form(detail: dict) -> dict:
-    """Build team form from matchResult API."""
-    result = detail.get("matchResult", {}).get("value", {})
-    form = {}
-
-    for side, key in [("home", "home"), ("away", "away")]:
-        side_data = result.get(key, {})
-        stats = side_data.get("statistics", {})
-        matches = side_data.get("matchList", [])
-
-        results = []
-        for m in matches[:5]:
-            # Score perspective: fullCourtGoal is "home:away"
-            home_goals = m.get("homeTeamFullCourtGoalCnt", "")
-            away_goals = m.get("awayTeamFullCourtGoalCnt", "")
-            home_name = m.get("homeTeamShortName", "")
-            away_name = m.get("awayTeamShortName", "")
-
-            # Determine this team's goals
-            team_name = side_data.get("statistics", {}).get("teamShortName", "")
-            if home_name == team_name:
-                team_goals = int(home_goals) if home_goals else None
-                opp_goals = int(away_goals) if away_goals else None
-                opponent = away_name
-            else:
-                team_goals = int(away_goals) if away_goals else None
-                opp_goals = int(home_goals) if home_goals else None
-                opponent = home_name
-
-            results.append({
-                "date": m.get("matchDate"),
-                "opponent": opponent,
-                "team_goals": team_goals,
-                "opponent_goals": opp_goals,
-                "half_time": m.get("halfTimeGoal"),
-                "result": m.get("teamMatchResult"),
-                "tournament": m.get("tournamentShortName"),
-            })
-
-        form[side] = {
-            "team": stats.get("teamShortName"),
-            "last5_record": f"{stats.get('winGoalMatchCnt', 0)}胜{stats.get('drawMatchCnt', 0)}平{stats.get('lossGoalMatchCnt', 0)}负",
-            "win_pct": stats.get("winProbability"),
-            "draw_pct": stats.get("drawProbability"),
-            "loss_pct": stats.get("lossProbability"),
-            "goals_for": stats.get("goalCnt"),
-            "goals_against": stats.get("lossGoalCnt"),
-            "net_goals": stats.get("netGoal"),
-            "results": results,
-        }
-
-    # Feature data
-    feature = detail.get("matchFeature", {}).get("value", {})
-    if feature:
-        form["feature"] = {
-            "home_last10": _fmt_record(feature.get("eachHomeAway", {}), "home"),
-            "away_last10": _fmt_record(feature.get("eachHomeAway", {}), "away"),
-            "home_goal_avg": feature.get("goalAvg", {}).get("homeGoalAvgCnt"),
-            "away_goal_avg": feature.get("goalAvg", {}).get("awayGoalAvgCnt"),
-            "home_loss_avg": feature.get("lossGoalAvg", {}).get("homeLossGoalAvgCnt"),
-            "away_loss_avg": feature.get("lossGoalAvg", {}).get("awayLossGoalAvgCnt"),
-        }
-
-    return form
-
-
-def _fmt_record(data: dict, side: str) -> str:
-    """Format record string from feature data."""
-    w = data.get(f"{side}WinGoalMatchCnt", 0)
-    d = data.get(f"{side}DrawMatchCnt", 0)
-    l = data.get(f"{side}LossGoalMatchCnt", 0)
-    return f"{w}胜{d}平{l}负"
-
-
-def _build_historical(detail: dict) -> dict:
-    """Build historical context."""
-    hist = detail.get("resultHistory", {}).get("value", {})
-    h2h = hist.get("matchList", [])
-    stats = hist.get("statistics", {})
-
-    matches = []
-    for m in h2h[:5]:
-        matches.append({
-            "date": m.get("matchDate"),
-            "tournament": m.get("tournamentShortName"),
-            "home": m.get("homeTeamShortName"),
-            "away": m.get("awayTeamShortName"),
-            "score": m.get("fullCourtGoal"),
-            "half_time": m.get("halfTimeGoal"),
-            "result": m.get("winningTeam"),
-        })
-
-    same_odds = detail.get("sameOdds", {}).get("value", {})
-
-    return {
-        "h2h_matches": matches,
-        "h2h_count": stats.get("totalLegCnt", 0),
-        "h2h_home_win_pct": stats.get("winProbability"),
-        "h2h_draw_pct": stats.get("drawProbability"),
-        "h2h_away_win_pct": stats.get("lossProbability"),
-        "same_odds_count": same_odds.get("totalLegCnt", 0),
-        "same_odds_home_win_pct": same_odds.get("winProbability"),
-    }
+# ── Legacy signal classifier (kept for test coverage) ──────────────────────
+# Production signal logic lives in structure_analysis.py + agent_report_schema.py.
+# This function is retained because test_llm_signals_crs_hafu.py exercises
+# CRS/HAFU signal classification through it.
 
 
 def _classify_signals(markets, movement, team_form, historical, status_control) -> dict:

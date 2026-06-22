@@ -56,8 +56,15 @@ def evaluate_leg(selection: dict, match: dict) -> tuple[str, str]:
         return ("hit" if option_code == actual else "miss"), actual
 
     if play_type == "crs":
-        actual = f"{home_score}:{away_score}"
-        return ("hit" if option_code == actual else "miss"), actual
+        actual_code = _crs_code(home_score, away_score)
+        return ("hit" if option_code == actual_code else "miss"), actual_code
+
+    if play_type == "hafu":
+        half_score = match.get("half_score")
+        actual_code = _hafu_code(half_score, home_score, away_score)
+        if actual_code is None:
+            return "unsupported", "missing_half_score"
+        return ("hit" if option_code == actual_code else "miss"), actual_code
 
     return "unsupported", str(play_type or "")
 
@@ -117,6 +124,25 @@ def settle_pending_tickets(conn: db.Connection, *, bet_group: str | None = None)
     return settlements
 
 
+def _crs_code(home_score: int, away_score: int) -> str:
+    """Build CRS option_code from scores, e.g. (2, 1) -> 's02s01'."""
+    return f"s{home_score:02d}s{away_score:02d}"
+
+
+def _hafu_code(half_score: str | None, home_score: int, away_score: int) -> str | None:
+    """Build HAFU option_code from half and full scores, e.g. '1:0', 2, 1 -> 'hh'."""
+    if not half_score or ":" not in half_score:
+        return None
+    try:
+        parts = half_score.split(":")
+        half_h, half_a = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        return None
+    half = "h" if half_h > half_a else "d" if half_h == half_a else "a"
+    full = "h" if home_score > away_score else "d" if home_score == away_score else "a"
+    return half + full
+
+
 def _had_result(home_score: int, away_score: int) -> str:
     if home_score > away_score:
         return "H"
@@ -126,8 +152,14 @@ def _had_result(home_score: int, away_score: int) -> str:
 
 
 def _hhad_result(home_score: int, away_score: int, goal_line: str) -> str:
-    adjusted_home = home_score + int(goal_line)
-    return _had_result(adjusted_home, away_score)
+    adjusted_home = home_score + float(goal_line)
+    # Compare as floats; when adjusted is a half-goal (e.g. 1.5), it can never
+    # equal away_score (int), so the result is always H or A, never D.
+    if adjusted_home > away_score:
+        return "H"
+    if adjusted_home < away_score:
+        return "A"
+    return "D"
 
 
 def _ticket_payout(ticket: dict, selections: list[dict]) -> float:
