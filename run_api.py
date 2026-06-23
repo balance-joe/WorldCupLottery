@@ -88,6 +88,21 @@ class ProcessController:
             "backend": db._db_backend(),
         }
 
+    def stop_fetch(self) -> dict[str, Any]:
+        with self._lock:
+            process = self._process
+            if not process or process.poll() is not None:
+                return self.status()
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            self._stopped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._logs.append("[controller] fetch process stopped")
+            return self.status()
+
     def logs(self) -> dict[str, Any]:
         return {"lines": list(self._logs)}
 
@@ -116,6 +131,16 @@ def index() -> str:
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     return controller.status()
+
+
+@app.post("/api/fetch/start")
+def start_fetch() -> dict[str, Any]:
+    return controller.start_fetch()
+
+
+@app.post("/api/fetch/stop")
+def stop_fetch() -> dict[str, Any]:
+    return controller.stop_fetch()
 
 
 @app.get("/api/fetch/logs")
@@ -177,6 +202,12 @@ def api_matches(date: str | None = None) -> dict[str, Any]:
                     match, sp_history, window="open_to_latest",
                     now_time=_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
+                latest_snapshot_time = None
+                if sp_history:
+                    latest_snapshot_time = max(
+                        (str(row.get("snapshot_time", "")) for row in sp_history),
+                        default="",
+                    ) or None
                 # 主推
                 main_play = main_pick = main_sp = None
                 for s in getattr(recommendation, "suggestions", ()):
@@ -198,6 +229,7 @@ def api_matches(date: str | None = None) -> dict[str, Any]:
                 priority = recommendation.structure.research_priority
                 gate = recommendation.gate
             except Exception:
+                latest_snapshot_time = None
                 main_play = main_pick = main_sp = score_pick = score_sp = goal_range = None
                 priority = "D"
                 gate = None
@@ -213,6 +245,7 @@ def api_matches(date: str | None = None) -> dict[str, Any]:
                 "home_score": match.get("home_score_90"),
                 "away_score": match.get("away_score_90"),
                 "result_90": match.get("result_90") or "",
+                "latest_snapshot_time": latest_snapshot_time,
                 "priority": priority,
                 "main_play": main_play,
                 "main_pick": main_pick,
@@ -242,7 +275,10 @@ def api_match_detail(match_id: str) -> dict[str, Any]:
     try:
         conn = db.get_connection()
         db.ensure_tables(conn)
-        match = db.fetch_match(conn, match_id)
+        match = next(
+            (row for row in db.fetch_matches_for_analysis(conn) if str(row.get("match_id")) == str(match_id)),
+            None,
+        )
         if not match:
             raise HTTPException(status_code=404, detail="Match not found")
         sp_history = db.fetch_all_sp_history(conn, [match_id])

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>竞彩足球 SP 控制台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="hero-kicker">Sporttery Football Radar</p>
+        <h1>竞彩足球 SP 控制台</h1>
+        <p class="hero-lede">围绕采集状态、市场结构、推荐门禁和票据台账，提供一个可直接操作和观察的单页控制面板。</p>
+      </div>
+      <div class="hero-actions">
+        <div class="live-card">
+          <div class="live-line">
+            <span id="runDot" class="run-dot"></span>
+            <strong id="runState">同步状态读取中</strong>
+          </div>
+          <p id="backend" class="live-meta">backend: -</p>
+          <p id="globalSyncTop" class="command-text">最后同步时间：-</p>
+        </div>
+        <div class="control-row sync-strip">
+          <div class="sync-chip">
+            <span>全局最后同步</span>
+            <strong id="globalSyncInline">-</strong>
+          </div>
+          <button id="refreshBtn" class="btn btn-ghost">刷新</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="overview-grid">
+      <article class="panel metric-panel">
+        <div class="panel-head">
+          <h2>运行概览</h2>
+          <span id="lastUpdated" class="micro-label">-</span>
+        </div>
+        <div id="metricCards" class="metric-cards"></div>
+      </article>
+
+      <article class="panel process-panel">
+        <div class="panel-head">
+          <h2>同步状态</h2>
+          <span id="fetchBadge" class="status-pill idle">idle</span>
+        </div>
+        <dl class="meta-grid">
+          <div><dt>PID</dt><dd id="pid">-</dd></div>
+          <div><dt>启动时间</dt><dd id="startedAt">-</dd></div>
+          <div><dt>停止时间</dt><dd id="stoppedAt">-</dd></div>
+          <div><dt>最新同步</dt><dd id="activeDate">-</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    <section class="workspace-grid">
+      <article class="panel match-panel">
+        <div class="panel-head panel-stack">
+          <div>
+            <h2>比赛筛选</h2>
+            <p class="panel-copy">从已入库比赛中查看优先级、主票方向、比分候选与门禁结果。</p>
+          </div>
+          <div class="filters">
+            <label class="field">
+              <span>日期</span>
+              <input id="dateInput" type="date">
+            </label>
+            <label class="field">
+              <span>优先级</span>
+              <select id="priorityFilter">
+                <option value="">全部</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+                <option value="D">D</option>
+              </select>
+            </label>
+            <label class="field search-field">
+              <span>搜索</span>
+              <input id="searchInput" type="search" placeholder="球队 / 联赛 / 场次">
+            </label>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="match-table">
+            <thead>
+              <tr>
+                <th>优先级</th>
+                <th>场次</th>
+                <th>联赛 / 对阵</th>
+                <th>开赛</th>
+                <th>最后刷新</th>
+                <th>正式主票</th>
+                <th>比分候选</th>
+                <th>进球范围</th>
+                <th>门禁</th>
+              </tr>
+            </thead>
+            <tbody id="matchesBody">
+              <tr><td colspan="9" class="empty-cell">加载中</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <aside class="detail-stack">
+        <article class="panel detail-panel">
+          <div class="panel-head">
+            <h2>单场分析</h2>
+            <span id="detailPriority" class="priority-badge priority-D">D</span>
+          </div>
+          <div id="detailEmpty" class="detail-empty">选择一场比赛后，这里会展示市场结构、风险和建议。</div>
+          <div id="detailContent" class="detail-content hidden">
+            <div class="detail-header">
+              <div>
+                <p id="detailMatchNum" class="micro-label">-</p>
+                <h3 id="detailTeams">-</h3>
+                <p id="detailMeta" class="detail-meta">-</p>
+              </div>
+              <div class="score-chip">
+                <span id="detailScore">-</span>
+              </div>
+            </div>
+
+            <div class="insight-grid">
+              <div class="insight-card">
+                <span>市场表达</span>
+                <strong id="marketExpression">-</strong>
+              </div>
+              <div class="insight-card">
+                <span>门禁结果</span>
+                <strong id="gateResult">-</strong>
+              </div>
+            </div>
+
+            <div class="trend-block">
+              <div class="trend-head">
+                <h4>HAD SP 走势</h4>
+                <div class="tab-row">
+                  <button class="tab-btn active" data-play="had">胜平负</button>
+                  <button class="tab-btn" data-play="hhad">让球</button>
+                  <button class="tab-btn" data-play="ttg">总进球</button>
+                </div>
+              </div>
+              <svg id="trendChart" class="trend-chart" viewBox="0 0 420 180" preserveAspectRatio="none"></svg>
+              <div id="trendLegend" class="trend-legend"></div>
+            </div>
+
+            <div class="list-block">
+              <h4>风险标记</h4>
+              <ul id="riskList" class="pill-list"></ul>
+            </div>
+
+            <div class="list-block">
+              <h4>建议输出</h4>
+              <div id="suggestionList" class="suggestion-list"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel ticket-panel">
+          <div class="panel-head">
+            <h2>票据台账</h2>
+            <span id="ticketTotal" class="micro-label">0 张</span>
+          </div>
+          <div id="ticketList" class="ticket-list">
+            <div class="ticket-empty">暂无票据</div>
+          </div>
+        </article>
+      </aside>
+    </section>
+
+    <section class="panel logs-panel">
+      <div class="panel-head">
+        <div>
+          <h2>抓取日志</h2>
+          <p class="panel-copy">保留最近 1000 行控制台输出，便于观察循环抓取和异常。</p>
+        </div>
+        <div class="sync-footer">
+          <span>底部最后同步时间</span>
+          <strong id="globalSyncBottom">-</strong>
+        </div>
+      </div>
+      <pre id="logs">暂无日志</pre>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

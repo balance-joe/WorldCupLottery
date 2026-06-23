@@ -1003,6 +1003,8 @@ def fetch_match(conn: Connection, match_id: str) -> dict | None:
     row = cur.fetchone()
     if not row:
         return None
+    if isinstance(row, dict):
+        return dict(row)
     cols = [d[0] for d in cur.description]
     return dict(zip(cols, row))
 
