@@ -128,7 +128,7 @@ def main():
 
     try:
         conn = db.get_connection()
-        print(f"已连接 SQLite: {db._SQLITE_PATH}")
+        print(f"已连接数据库: {conn.backend}")
     except Exception as e:
         print(f"数据库连接失败: {e}")
         sys.exit(1)

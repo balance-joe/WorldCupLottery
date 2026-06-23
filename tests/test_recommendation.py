@@ -29,6 +29,7 @@ class RecommendationTest(unittest.TestCase):
         recommendation = build_match_recommendation(match, records)
         self.assertFalse(recommendation.gate.allowed)
         self.assertIn("priority_D_blocked", recommendation.gate.reasons)
+        self.assertEqual(recommendation.suggestions, ())
 
     def test_build_match_recommendation_generates_aligned_candidates(self):
         match = {
@@ -72,8 +73,12 @@ class RecommendationTest(unittest.TestCase):
         recommendation = build_match_recommendation(match, records)
         self.assertTrue(recommendation.gate.allowed)
         self.assertEqual(recommendation.candidates.had_options, ("H",))
+        self.assertEqual(recommendation.candidates.hhad_options, ("H",))
         self.assertIn("3", recommendation.candidates.ttg_options)
         self.assertEqual(recommendation.candidates.crs_options[:2], ("s02s00", "s02s01"))
+        self.assertEqual(len(recommendation.suggestions), 1)
+        self.assertEqual(recommendation.suggestions[0].play_type, "hhad")
+        self.assertEqual(recommendation.suggestions[0].selections, ("H",))
 
 
 if __name__ == "__main__":

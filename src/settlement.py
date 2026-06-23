@@ -195,10 +195,10 @@ def _update_ticket(conn: db.Connection, ticket_id: int, status: str, payout: flo
             actual_payout = ?,
             profit_loss = ?,
             settled_at = ?,
-            updated_at = datetime('now','localtime')
+            updated_at = ?
         WHERE id = ?
         """,
-        (status, payout, profit_loss, now, ticket_id),
+        (status, payout, profit_loss, now, now, ticket_id),
     )
 
 

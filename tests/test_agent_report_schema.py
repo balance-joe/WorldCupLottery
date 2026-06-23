@@ -100,7 +100,7 @@ class FinalResearchPriorityTest(unittest.TestCase):
     def test_picks_best_across_windows(self):
         structures = {
             "open_to_latest": _structure("open_to_latest", "home_small_win_supported", "B"),
-            "last_1h": _structure("last_1h", "home_big_win_supported", "A"),
+            "last_6h": _structure("last_6h", "home_big_win_supported", "A"),
         }
         self.assertEqual(final_research_priority(structures), "A")
 

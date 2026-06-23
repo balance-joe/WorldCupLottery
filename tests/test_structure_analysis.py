@@ -16,6 +16,29 @@ def row(match_id, play_type, code, sp, t, name=None, goal_line=None):
 
 
 class StructureAnalysisBlendTest(unittest.TestCase):
+    def test_default_windows_exclude_last_1h(self):
+        match = {
+            "match_id": "1",
+            "match_num": "周三001",
+            "league_name": "世界杯",
+            "match_time": "2026-06-11 22:00:00",
+            "home_team_name": "法国",
+            "away_team_name": "丹麦",
+        }
+        sp_history = [
+            row("1", "had", "H", 2.10, "2026-06-11 10:00:00"),
+            row("1", "had", "D", 3.20, "2026-06-11 10:00:00"),
+            row("1", "had", "A", 3.10, "2026-06-11 10:00:00"),
+            row("1", "had", "H", 1.85, "2026-06-11 20:00:00"),
+            row("1", "had", "D", 3.30, "2026-06-11 20:00:00"),
+            row("1", "had", "A", 3.80, "2026-06-11 20:00:00"),
+        ]
+
+        result = analyze_match_windows(match, sp_history)
+
+        self.assertEqual(set(result["market_structures"]), {"open_to_latest", "last_24h", "last_6h"})
+        self.assertNotIn("last_1h", result["llm_input"]["window_summaries"])
+
     def test_non_sp_confirmation_upgrades_priority(self):
         match = {
             "match_id": "1",

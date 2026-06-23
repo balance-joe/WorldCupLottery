@@ -18,6 +18,9 @@
 
 - Python 3.11+
 - requests
+- pymysql
+- fastapi
+- uvicorn
 
 ### 安装
 
@@ -28,7 +31,22 @@ pip install -r requirements.txt
 ### 运行
 
 ```bash
-# 抓取关注列表全部比赛 + SP（SQLite）
+# 启动控制台页面
+python run_api.py
+```
+
+打开 `http://127.0.0.1:8000`，在页面里启动/停止 5 分钟循环抓取。
+
+控制台启动的抓取命令固定为：
+
+```bash
+python -m scripts.fetch_sporttery --mode today --interval-seconds 300 --repeat 0
+```
+
+也可以直接命令行运行：
+
+```bash
+# 抓取关注列表全部比赛 + SP
 python -m scripts.fetch_sporttery --mode today
 
 # 抓取单场比赛
@@ -162,11 +180,12 @@ football/
 │   ├── recommendation.py        # 推荐门禁 + HAD/TTG/CRS 候选生成
 │   ├── agent_report_schema.py   # LLM 结构化输入包
 │   ├── structure_analysis.py    # 分析编排
-│   ├── db.py                    # SQLite 数据库
+│   ├── db.py                    # MySQL 数据库访问
 │   ├── llm_package.py           # LLM 分析包生成器
 │   └── tickets.py               # 胜平负手工票合法性校验
-├── data/                        # SQLite 数据库 + 导出文件
+├── web/                         # FastAPI 控制台页面
 ├── tests/                       # 单元测试
+├── run_api.py                   # FastAPI 控制入口
 ├── requirements.txt
 └── README.md
 ```
@@ -188,7 +207,18 @@ football/
 
 ### 连接方式
 
-只使用 SQLite。数据文件在 `data/sporttery.db`，零配置。
+运行时只使用 MySQL。配置写在项目根目录 `.env`，脚本通过 `src.db` 自动读取：
+
+```powershell
+$env:SPORTTERY_DB_BACKEND='mysql'
+$env:SPORTTERY_MYSQL_HOST='your-host'
+$env:SPORTTERY_MYSQL_PORT='3309'
+$env:SPORTTERY_MYSQL_USER='football'
+$env:SPORTTERY_MYSQL_PASSWORD='your-password'
+$env:SPORTTERY_MYSQL_DATABASE='football'
+```
+
+SQLite 本地库已不作为业务数据源；仅单元测试内部使用临时 SQLite 隔离环境。
 
 ---
 
@@ -295,7 +325,6 @@ SP 快照
 open_to_latest
 last_24h
 last_6h
-last_1h
 ```
 
 同玩法趋势输出包括：
@@ -335,14 +364,12 @@ python -m scripts.analyze_today_matches --window last_24h
 python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-detail
 ```
 
-`--save` 会写入 `sporttery_market_analysis`，用于保存赛前每次结构分析，便于后续复盘。
-
-### 推荐门禁与候选玩法
+### 推荐门禁与每日输出
 
 项目现在把“读盘”和“出票建议”拆开：
 
 - `market_structure` 负责描述市场表达
-- `recommendation` 负责判断是否可买，并生成候选玩法
+- `recommendation` 负责判断是否可买，并生成每日建议所需的主预测、进球区间和辅助比分
 
 当前门禁规则：
 
@@ -350,17 +377,23 @@ python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-
 - `had/hhad/ttg` 至少要有 2 笔快照才能作为推荐依据
 - 高冲突盘会拦截 `had/hhad/crs`
 - `had` 不足时，不推荐 `crs`
-- 输出的候选分为：
-  - `had_options`
-  - `ttg_options`
-  - `crs_options`
 
 `scripts.analyze_today_matches` 会直接打印：
 
-- `可买:Y/N`
-- `玩法: had,hhad,ttg,crs`
-- `候选:HAD=... TTG=... CRS=...`
+- `分类: 主推场/观察场/过滤场`
+- `正式主票: had:H / hhad:A / 不买`
+- `正式比分小票: crs:s02s00 / 不买`
+- `辅助观察: 进球区间、半场胜平负、半全场`
 - `门禁: ...`
+
+每日建议可以用赛前 SP 做资金回测：
+
+```bash
+python -m scripts.backtest_daily_suggestions --league 世界杯 --mode recommendation
+python -m scripts.backtest_daily_suggestions --league 世界杯 --mode recommendation --unit-stake 2 --detail
+```
+
+收益口径：正式主票按结构选择 `HAD` 或 `HHAD`；正式比分小票只在主推场展示 `CRS`，和主票分开复盘；日报里的 `进球区间`、半场胜平负和半全场是观察/辅助字段，不进入主票收益。
 
 ### 非 SP 证据层
 
@@ -398,7 +431,10 @@ python -m scripts.analyze_today_matches --date 2026-06-12 --with-detail --fetch-
 | hhad | 让球胜平负 | H / D / A |
 | ttg | 总进球 | 0 / 1 / 2 / 3 / 4 / 5 / 6 / 7 |
 | crs | 比分 | s01s00 等（后续） |
-| hafu | 半全场 | hh / hd / ha 等（后续） |
+| hafu | 半全场 | hh / hd / ha 等 |
+| half_result | 半场胜平负 | H / D / A，由 hafu 聚合推断 |
+
+当前本地 SP 数据没有独立半场进球玩法；半场相关预测/回测只覆盖 `hafu` 和由 `hafu` 聚合出的 `half_result`。
 
 ---
 
@@ -505,11 +541,6 @@ python -m scripts.fetch_results --match-date 2026-06-10
       "risk_flags": []
     },
     "last_6h": {
-      "market_structure": {},
-      "summary_signals": [],
-      "risk_flags": []
-    },
-    "last_1h": {
       "market_structure": {},
       "summary_signals": [],
       "risk_flags": []

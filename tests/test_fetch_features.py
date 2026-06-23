@@ -7,6 +7,7 @@
 
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 from src import db as db_mod
@@ -89,7 +90,9 @@ class _DBTestBase(unittest.TestCase):
 
     def setUp(self):
         self._orig_path = db_mod._SQLITE_PATH
+        self._orig_backend = os.environ.get("SPORTTERY_DB_BACKEND")
         self._tmpdir = tempfile.mkdtemp()
+        os.environ["SPORTTERY_DB_BACKEND"] = "sqlite"
         db_mod._SQLITE_PATH = Path(self._tmpdir) / "test.db"
         self.conn = db_mod.get_connection()
         db_mod.ensure_tables(self.conn)
@@ -97,6 +100,10 @@ class _DBTestBase(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         db_mod._SQLITE_PATH = self._orig_path
+        if self._orig_backend is None:
+            os.environ.pop("SPORTTERY_DB_BACKEND", None)
+        else:
+            os.environ["SPORTTERY_DB_BACKEND"] = self._orig_backend
 
 
 class RawSnapshotVersionTest(_DBTestBase):

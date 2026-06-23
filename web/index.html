@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Football SP 控制台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Sporttery Football SP</p>
+        <h1>数据抓取控制台</h1>
+        <p class="lede">统一控制 MySQL 长期累积、5 分钟循环抓取和运行日志。</p>
+      </div>
+      <div class="status-card">
+        <span id="runDot" class="dot"></span>
+        <strong id="runState">读取中</strong>
+        <small id="backend">backend: -</small>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>抓取任务</h2>
+        <p class="command" id="command">-</p>
+        <div class="actions">
+          <button id="startBtn">启动 5 分钟循环抓取</button>
+          <button id="stopBtn" class="secondary">停止抓取</button>
+        </div>
+        <dl class="meta">
+          <div><dt>PID</dt><dd id="pid">-</dd></div>
+          <div><dt>启动时间</dt><dd id="startedAt">-</dd></div>
+          <div><dt>停止时间</dt><dd id="stoppedAt">-</dd></div>
+        </dl>
+      </article>
+
+      <article class="panel">
+        <h2>数据库概览</h2>
+        <div id="dbCards" class="cards"></div>
+        <p class="muted">最新 SP 快照：<span id="latestSp">-</span></p>
+      </article>
+    </section>
+
+    <section class="panel logs">
+      <div class="panel-head">
+        <h2>抓取日志</h2>
+        <button id="refreshBtn" class="secondary small">刷新</button>
+      </div>
+      <pre id="logs">暂无日志</pre>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

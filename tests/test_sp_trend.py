@@ -267,6 +267,21 @@ class SpTrendTest(unittest.TestCase):
         self.assertTrue(trend.available)
         self.assertEqual(trend.snapshot_start_time[:19], "2026-06-11T13:30:00")
 
+    def test_last_1h_window_is_not_supported(self):
+        records = [
+            row("1", "had", "H", 2.10, "2026-06-11 13:30:00"),
+            row("1", "had", "D", 3.20, "2026-06-11 13:30:00"),
+            row("1", "had", "A", 3.10, "2026-06-11 13:30:00"),
+            row("1", "had", "H", 1.85, "2026-06-11 20:00:00"),
+            row("1", "had", "D", 3.40, "2026-06-11 20:00:00"),
+            row("1", "had", "A", 3.60, "2026-06-11 20:00:00"),
+        ]
+
+        trend = analyze_play_trend("1", "had", "last_1h", records)
+
+        self.assertFalse(trend.available)
+        self.assertEqual(trend.reason, "unsupported_window")
+
 
 if __name__ == "__main__":
     unittest.main()

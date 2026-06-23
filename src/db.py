@@ -1,17 +1,62 @@
-"""SQLite database operations for Sporttery data."""
+"""Database operations for Sporttery data.
+
+MySQL is the runtime backend. SQLite support is retained only for isolated unit
+tests and legacy migration utilities.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 from src.sp_movement import latest_records
 
 _SQLITE_PATH = Path(__file__).resolve().parent.parent / "data" / "sporttery.db"
-SOURCE_TYPES = frozenset({"SYSTEM", "USER_ODDS_ONLY", "USER_MODIFIED", "USER_ACTUAL", "UNKNOWN"})
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_LOADED = False
+SOURCE_TYPES = frozenset({
+    "AI_RECOMMENDATION",
+    "BACKTEST_SIMULATED",
+    "SYSTEM",
+    "UNKNOWN",
+    "USER_ACTUAL",
+    "USER_MODIFIED",
+    "USER_ODDS_ONLY",
+})
+
+
+def _db_backend() -> str:
+    _load_env_file()
+    return os.environ.get("SPORTTERY_DB_BACKEND", "mysql").strip().lower() or "mysql"
+
+
+def _now_sql() -> str:
+    return "datetime('now','localtime')"
+
+
+def _load_env_file() -> None:
+    """Load simple KEY=VALUE pairs from project .env without overriding env vars."""
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    _ENV_LOADED = True
+    env_path = _PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 # DDL
@@ -180,15 +225,358 @@ CREATE TABLE IF NOT EXISTS betting_ticket_selection (
 """
 
 
+DDL_DAILY_RECOMMENDATION = """
+CREATE TABLE IF NOT EXISTS daily_recommendation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_date TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    match_id TEXT NOT NULL,
+    match_num TEXT NULL,
+    league_name TEXT NULL,
+    home_team_name TEXT NULL,
+    away_team_name TEXT NULL,
+    match_time TEXT NULL,
+    recommendation_level TEXT NOT NULL,
+    main_play_type TEXT NULL,
+    main_option_code TEXT NULL,
+    main_option_name TEXT NULL,
+    main_sp REAL NULL,
+    score_option_code TEXT NULL,
+    score_option_name TEXT NULL,
+    score_sp REAL NULL,
+    aux_json TEXT NULL,
+    gates_json TEXT NULL,
+    model_version TEXT NOT NULL DEFAULT 'sp_structure_v1',
+    sp_snapshot_time TEXT NULL,
+    notes TEXT NULL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(recommendation_date, generated_at, match_id)
+);
+"""
+
+
+MYSQL_DDL_RAW_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS sporttery_raw_snapshot (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    source_name VARCHAR(64) NOT NULL,
+    source_url TEXT NOT NULL,
+    request_params JSON NULL,
+    match_id VARCHAR(32) NULL,
+    snapshot_time DATETIME NOT NULL,
+    raw_content LONGTEXT NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    http_status INT NULL,
+    parse_status INT DEFAULT 0,
+    error_message TEXT NULL,
+    response_version INT DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_raw_content_hash (content_hash),
+    KEY idx_raw_source_match_time (source_name, match_id, snapshot_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_MATCH = """
+CREATE TABLE IF NOT EXISTS sporttery_match (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    sport_code VARCHAR(16) NOT NULL DEFAULT 'football',
+    match_id VARCHAR(32) NOT NULL,
+    match_num VARCHAR(32) NULL,
+    league_id VARCHAR(32) NULL,
+    league_name VARCHAR(128) NULL,
+    home_team_id VARCHAR(32) NULL,
+    away_team_id VARCHAR(32) NULL,
+    home_team_name VARCHAR(128) NULL,
+    away_team_name VARCHAR(128) NULL,
+    match_time DATETIME NULL,
+    match_status VARCHAR(16) NULL,
+    match_status_name VARCHAR(64) NULL,
+    home_score_90 INT NULL,
+    away_score_90 INT NULL,
+    result_90 VARCHAR(4) NULL,
+    half_score VARCHAR(16) NULL,
+    full_score_90 VARCHAR(16) NULL,
+    result_source VARCHAR(64) NULL,
+    result_updated_at DATETIME NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_match_id (match_id),
+    KEY idx_match_league_time (league_name, match_time),
+    KEY idx_match_status_time (match_status, match_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_SP_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS sporttery_sp_snapshot (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    sport_code VARCHAR(16) NOT NULL DEFAULT 'football',
+    match_id VARCHAR(32) NOT NULL,
+    snapshot_time DATETIME NOT NULL,
+    play_type VARCHAR(16) NOT NULL,
+    option_code VARCHAR(32) NOT NULL,
+    option_name VARCHAR(128) NULL,
+    sp_value DECIMAL(10, 4) NOT NULL,
+    goal_line VARCHAR(16) NULL,
+    is_single TINYINT DEFAULT 0,
+    implied_prob_raw DECIMAL(18, 10) NULL,
+    implied_prob_norm DECIMAL(18, 10) NULL,
+    prob_sum DECIMAL(18, 10) NULL,
+    content_hash CHAR(16) NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_sp_snapshot (match_id, snapshot_time, play_type, option_code),
+    KEY idx_sp_match_play_time (match_id, play_type, snapshot_time),
+    KEY idx_sp_play_time (play_type, snapshot_time),
+    KEY idx_sp_content (match_id, snapshot_time, play_type, option_code, content_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_SIGNAL = """
+CREATE TABLE IF NOT EXISTS sporttery_signal (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    match_id VARCHAR(32) NOT NULL,
+    snapshot_time DATETIME NOT NULL,
+    signal_type VARCHAR(64) NOT NULL,
+    signal_level VARCHAR(32) NOT NULL,
+    play_type VARCHAR(16) NULL,
+    option_code VARCHAR(32) NULL,
+    description TEXT NOT NULL,
+    evidence_json JSON NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_signal_match_time (match_id, snapshot_time),
+    KEY idx_signal_type_level (signal_type, signal_level)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_API_ERROR = """
+CREATE TABLE IF NOT EXISTS sporttery_api_error (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    endpoint VARCHAR(64) NOT NULL,
+    request_params JSON NULL,
+    match_id VARCHAR(32) NULL,
+    http_status INT NULL,
+    error_message TEXT NOT NULL,
+    retry_count INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_api_error_endpoint_time (endpoint, created_at),
+    KEY idx_api_error_match (match_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_MARKET_ANALYSIS = """
+CREATE TABLE IF NOT EXISTS sporttery_market_analysis (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    match_id VARCHAR(32) NOT NULL,
+    analysis_time DATETIME NOT NULL,
+    window VARCHAR(32) NOT NULL,
+    had_direction VARCHAR(32) NULL,
+    hhad_direction VARCHAR(32) NULL,
+    ttg_direction VARCHAR(32) NULL,
+    consistency_level VARCHAR(32) NULL,
+    main_market_expression VARCHAR(128) NULL,
+    research_priority VARCHAR(8) NULL,
+    risk_flags_json JSON NULL,
+    suggested_focus_json JSON NULL,
+    avoid_focus_json JSON NULL,
+    raw_analysis_json JSON NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_market_analysis (match_id, analysis_time, window),
+    KEY idx_market_match_window_time (match_id, window, analysis_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_DAILY_RECOMMENDATION = """
+CREATE TABLE IF NOT EXISTS daily_recommendation (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    recommendation_date DATE NOT NULL,
+    generated_at DATETIME NOT NULL,
+    match_id VARCHAR(32) NOT NULL,
+    match_num VARCHAR(32) NULL,
+    league_name VARCHAR(128) NULL,
+    home_team_name VARCHAR(128) NULL,
+    away_team_name VARCHAR(128) NULL,
+    match_time DATETIME NULL,
+    recommendation_level VARCHAR(16) NOT NULL,
+    main_play_type VARCHAR(16) NULL,
+    main_option_code VARCHAR(32) NULL,
+    main_option_name VARCHAR(128) NULL,
+    main_sp DECIMAL(10, 4) NULL,
+    score_option_code VARCHAR(32) NULL,
+    score_option_name VARCHAR(128) NULL,
+    score_sp DECIMAL(10, 4) NULL,
+    aux_json JSON NULL,
+    gates_json JSON NULL,
+    model_version VARCHAR(64) NOT NULL DEFAULT 'sp_structure_v1',
+    sp_snapshot_time DATETIME NULL,
+    notes TEXT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_daily_recommendation (recommendation_date, generated_at, match_id),
+    KEY idx_daily_match (match_id),
+    KEY idx_daily_level_date (recommendation_level, recommendation_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_BETTING_TICKET = """
+CREATE TABLE IF NOT EXISTS betting_ticket (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    bet_group VARCHAR(128) NULL,
+    source_type VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+    ticket_label VARCHAR(255) NOT NULL,
+    pass_type VARCHAR(32) NOT NULL,
+    stake_amount DECIMAL(12, 2) NOT NULL,
+    unit_stake DECIMAL(12, 2) DEFAULT 2,
+    multiplier INT DEFAULT 1,
+    ticket_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    expected_min_payout DECIMAL(12, 2) NULL,
+    expected_max_payout DECIMAL(12, 2) NULL,
+    actual_payout DECIMAL(12, 2) NULL,
+    profit_loss DECIMAL(12, 2) NULL,
+    placed_at DATETIME NOT NULL,
+    settled_at DATETIME NULL,
+    notes TEXT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_ticket_source_status_time (source_type, ticket_status, placed_at),
+    KEY idx_ticket_group (bet_group)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDL_BETTING_TICKET_SELECTION = """
+CREATE TABLE IF NOT EXISTS betting_ticket_selection (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    ticket_id BIGINT NOT NULL,
+    leg_index INT NOT NULL,
+    match_id VARCHAR(32) NOT NULL,
+    match_num VARCHAR(32) NULL,
+    play_type VARCHAR(16) NOT NULL,
+    option_code VARCHAR(32) NOT NULL,
+    option_name VARCHAR(128) NULL,
+    goal_line VARCHAR(16) NULL,
+    selected_sp DECIMAL(10, 4) NOT NULL,
+    sp_snapshot_id BIGINT NULL,
+    sp_snapshot_time DATETIME NULL,
+    result_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    actual_result VARCHAR(32) NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ticket_selection (ticket_id, leg_index, match_id, play_type, option_code),
+    KEY idx_selection_match_play (match_id, play_type),
+    KEY idx_selection_snapshot (sp_snapshot_id),
+    CONSTRAINT fk_ticket_selection_ticket FOREIGN KEY(ticket_id) REFERENCES betting_ticket(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+MYSQL_DDLS = (
+    MYSQL_DDL_RAW_SNAPSHOT,
+    MYSQL_DDL_MATCH,
+    MYSQL_DDL_SP_SNAPSHOT,
+    MYSQL_DDL_SIGNAL,
+    MYSQL_DDL_API_ERROR,
+    MYSQL_DDL_MARKET_ANALYSIS,
+    MYSQL_DDL_DAILY_RECOMMENDATION,
+    MYSQL_DDL_BETTING_TICKET,
+    MYSQL_DDL_BETTING_TICKET_SELECTION,
+)
+
+
+SQLITE_DDLS = (
+    DDL_RAW_SNAPSHOT,
+    DDL_MATCH,
+    DDL_SP_SNAPSHOT,
+    DDL_SIGNAL,
+    DDL_API_ERROR,
+    DDL_MARKET_ANALYSIS,
+    DDL_DAILY_RECOMMENDATION,
+    DDL_BETTING_TICKET,
+    DDL_BETTING_TICKET_SELECTION,
+)
+
+
 # Connection
 
+class Row(dict):
+    """Dict row that also supports positional indexing like sqlite3.Row."""
+
+    def __init__(self, values: Iterable, columns: list[str]):
+        super().__init__(zip(columns, values))
+        self._values = tuple(values)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return super().__getitem__(key)
+
+
+class CursorAdapter:
+    """Normalize sqlite3 and PyMySQL cursors for the existing project code."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        return self._wrap(row)
+
+    def fetchall(self):
+        return [self._wrap(row) for row in self._cursor.fetchall()]
+
+    def _wrap(self, row):
+        if row is None:
+            return None
+        if isinstance(row, sqlite3.Row):
+            return row
+        if isinstance(row, dict):
+            values = list(row.values())
+            columns = list(row.keys())
+            return Row(values, columns)
+        columns = [d[0] for d in self._cursor.description]
+        return Row(row, columns)
+
+
 class Connection:
-    """Small SQLite connection wrapper used by the project."""
+    """Small database connection wrapper used by the project."""
 
     def __init__(self):
-        _SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(_SQLITE_PATH))
-        self._conn.row_factory = sqlite3.Row
+        self.backend = _db_backend()
+        if self.backend == "mysql":
+            import pymysql
+
+            self._conn = pymysql.connect(
+                host=os.environ["SPORTTERY_MYSQL_HOST"],
+                port=int(os.environ.get("SPORTTERY_MYSQL_PORT", "3306")),
+                user=os.environ["SPORTTERY_MYSQL_USER"],
+                password=os.environ["SPORTTERY_MYSQL_PASSWORD"],
+                database=os.environ["SPORTTERY_MYSQL_DATABASE"],
+                charset=os.environ.get("SPORTTERY_MYSQL_CHARSET", "utf8mb4"),
+                autocommit=False,
+                connect_timeout=int(os.environ.get("SPORTTERY_MYSQL_CONNECT_TIMEOUT", "10")),
+                read_timeout=int(os.environ.get("SPORTTERY_MYSQL_READ_TIMEOUT", "30")),
+                write_timeout=int(os.environ.get("SPORTTERY_MYSQL_WRITE_TIMEOUT", "30")),
+            )
+        elif self.backend == "sqlite":
+            _SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(_SQLITE_PATH))
+            self._conn.row_factory = sqlite3.Row
+        else:
+            raise ValueError(f"unsupported SPORTTERY_DB_BACKEND={self.backend!r}")
 
     def __enter__(self):
         return self
@@ -198,7 +586,7 @@ class Connection:
         return False
 
     def cursor(self):
-        return self._conn.cursor()
+        return CursorAdapter(self._conn.cursor())
 
     def commit(self):
         self._conn.commit()
@@ -208,20 +596,29 @@ class Connection:
 
     def execute(self, sql: str, params=None):
         cur = self._conn.cursor()
+        if self.backend == "mysql":
+            sql = _mysqlize_sql(sql)
         if params:
             cur.execute(sql, params)
         else:
             cur.execute(sql)
-        return cur
+        return CursorAdapter(cur)
 
     def executemany(self, sql: str, params_list):
         cur = self._conn.cursor()
+        if self.backend == "mysql":
+            sql = _mysqlize_sql(sql)
         cur.executemany(sql, params_list)
-        return cur
+        return CursorAdapter(cur)
+
+
+def _mysqlize_sql(sql: str) -> str:
+    """Translate the project's SQLite-style placeholders for PyMySQL."""
+    return sql.replace("?", "%s")
 
 
 def get_connection() -> Connection:
-    """Return a new SQLite database connection."""
+    """Return a new configured database connection."""
     return Connection()
 
 
@@ -232,19 +629,17 @@ def ensure_tables(conn: Connection | None = None) -> None:
         conn = get_connection()
         close = True
     try:
-        conn.execute(DDL_RAW_SNAPSHOT)
-        conn.execute(DDL_MATCH)
-        conn.execute(DDL_SP_SNAPSHOT)
-        conn.execute(DDL_SIGNAL)
-        conn.execute(DDL_API_ERROR)
-        conn.execute(DDL_MARKET_ANALYSIS)
-        conn.execute(DDL_BETTING_TICKET)
-        conn.execute(DDL_BETTING_TICKET_SELECTION)
-        _ensure_match_result_columns(conn)
-        _ensure_raw_snapshot_version_column(conn)
-        _ensure_betting_ticket_columns(conn)
-        _ensure_betting_selection_columns(conn)
-        conn.commit()
+        for ddl in MYSQL_DDLS if conn.backend == "mysql" else SQLITE_DDLS:
+            conn.execute(ddl)
+        if conn.backend == "sqlite":
+            _ensure_match_result_columns(conn)
+            _ensure_raw_snapshot_version_column(conn)
+            _ensure_betting_ticket_columns(conn)
+            _ensure_betting_selection_columns(conn)
+            _ensure_daily_recommendation_table(conn)
+            conn.commit()
+        else:
+            conn.commit()
     finally:
         if close:
             conn.close()
@@ -339,27 +734,46 @@ def save_match(conn: Connection, match: dict) -> None:
     if m.get("match_time") and hasattr(m["match_time"], "strftime"):
         m["match_time"] = m["match_time"].strftime("%Y-%m-%d %H:%M:%S")
 
-    conn.execute(
-        """
-        INSERT INTO sporttery_match
-            (match_id, match_num, league_id, league_name,
-             home_team_id, away_team_id, home_team_name, away_team_name,
-             match_time, match_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(match_id) DO UPDATE SET
-            match_num=excluded.match_num, league_id=excluded.league_id,
-            league_name=excluded.league_name, home_team_id=excluded.home_team_id,
-            away_team_id=excluded.away_team_id, home_team_name=excluded.home_team_name,
-            away_team_name=excluded.away_team_name, match_time=excluded.match_time,
-            match_status=excluded.match_status
-        """,
-        (
-            m["match_id"], m.get("match_num"), m.get("league_id"),
-            m.get("league_name"), m.get("home_team_id"), m.get("away_team_id"),
-            m.get("home_team_name"), m.get("away_team_name"),
-            m.get("match_time"), m.get("match_status"),
-        ),
+    params = (
+        m["match_id"], m.get("match_num"), m.get("league_id"),
+        m.get("league_name"), m.get("home_team_id"), m.get("away_team_id"),
+        m.get("home_team_name"), m.get("away_team_name"),
+        m.get("match_time"), m.get("match_status"),
     )
+    if conn.backend == "mysql":
+        conn.execute(
+            """
+            INSERT INTO sporttery_match
+                (match_id, match_num, league_id, league_name,
+                 home_team_id, away_team_id, home_team_name, away_team_name,
+                 match_time, match_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                match_num=VALUES(match_num), league_id=VALUES(league_id),
+                league_name=VALUES(league_name), home_team_id=VALUES(home_team_id),
+                away_team_id=VALUES(away_team_id), home_team_name=VALUES(home_team_name),
+                away_team_name=VALUES(away_team_name), match_time=VALUES(match_time),
+                match_status=VALUES(match_status)
+            """,
+            params,
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO sporttery_match
+                (match_id, match_num, league_id, league_name,
+                 home_team_id, away_team_id, home_team_name, away_team_name,
+                 match_time, match_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_id) DO UPDATE SET
+                match_num=excluded.match_num, league_id=excluded.league_id,
+                league_name=excluded.league_name, home_team_id=excluded.home_team_id,
+                away_team_id=excluded.away_team_id, home_team_name=excluded.home_team_name,
+                away_team_name=excluded.away_team_name, match_time=excluded.match_time,
+                match_status=excluded.match_status
+            """,
+            params,
+        )
 
 
 def save_matches(conn: Connection, matches: list[dict]) -> int:
@@ -377,45 +791,78 @@ def save_match_result(conn: Connection, result: dict) -> None:
         r["match_time"] = r["match_time"].strftime("%Y-%m-%d %H:%M:%S")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    conn.execute(
-        """
-        INSERT INTO sporttery_match
-            (match_id, match_num, league_id, league_name,
-             home_team_id, away_team_id, home_team_name, away_team_name,
-             match_time, match_status, match_status_name,
-             home_score_90, away_score_90, result_90,
-             half_score, full_score_90, result_source, result_updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(match_id) DO UPDATE SET
-            match_num=excluded.match_num,
-            league_id=excluded.league_id,
-            league_name=excluded.league_name,
-            home_team_id=excluded.home_team_id,
-            away_team_id=excluded.away_team_id,
-            home_team_name=excluded.home_team_name,
-            away_team_name=excluded.away_team_name,
-            match_time=excluded.match_time,
-            match_status=excluded.match_status,
-            match_status_name=excluded.match_status_name,
-            home_score_90=excluded.home_score_90,
-            away_score_90=excluded.away_score_90,
-            result_90=excluded.result_90,
-            half_score=excluded.half_score,
-            full_score_90=excluded.full_score_90,
-            result_source=excluded.result_source,
-            result_updated_at=excluded.result_updated_at,
-            updated_at=datetime('now','localtime')
-        """,
-        (
-            r["match_id"], r.get("match_num"), r.get("league_id"),
-            r.get("league_name"), r.get("home_team_id"), r.get("away_team_id"),
-            r.get("home_team_name"), r.get("away_team_name"),
-            r.get("match_time"), r.get("match_status"), r.get("match_status_name"),
-            r.get("home_score_90"), r.get("away_score_90"), r.get("result_90"),
-            r.get("half_score"), r.get("full_score_90"),
-            r.get("result_source", "sporttery_zqsj"), now,
-        ),
+    params = (
+        r["match_id"], r.get("match_num"), r.get("league_id"),
+        r.get("league_name"), r.get("home_team_id"), r.get("away_team_id"),
+        r.get("home_team_name"), r.get("away_team_name"),
+        r.get("match_time"), r.get("match_status"), r.get("match_status_name"),
+        r.get("home_score_90"), r.get("away_score_90"), r.get("result_90"),
+        r.get("half_score"), r.get("full_score_90"),
+        r.get("result_source", "sporttery_zqsj"), now,
     )
+    if conn.backend == "mysql":
+        conn.execute(
+            """
+            INSERT INTO sporttery_match
+                (match_id, match_num, league_id, league_name,
+                 home_team_id, away_team_id, home_team_name, away_team_name,
+                 match_time, match_status, match_status_name,
+                 home_score_90, away_score_90, result_90,
+                 half_score, full_score_90, result_source, result_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                match_num=VALUES(match_num),
+                league_id=VALUES(league_id),
+                league_name=VALUES(league_name),
+                home_team_id=VALUES(home_team_id),
+                away_team_id=VALUES(away_team_id),
+                home_team_name=VALUES(home_team_name),
+                away_team_name=VALUES(away_team_name),
+                match_time=VALUES(match_time),
+                match_status=VALUES(match_status),
+                match_status_name=VALUES(match_status_name),
+                home_score_90=VALUES(home_score_90),
+                away_score_90=VALUES(away_score_90),
+                result_90=VALUES(result_90),
+                half_score=VALUES(half_score),
+                full_score_90=VALUES(full_score_90),
+                result_source=VALUES(result_source),
+                result_updated_at=VALUES(result_updated_at)
+            """,
+            params,
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO sporttery_match
+                (match_id, match_num, league_id, league_name,
+                 home_team_id, away_team_id, home_team_name, away_team_name,
+                 match_time, match_status, match_status_name,
+                 home_score_90, away_score_90, result_90,
+                 half_score, full_score_90, result_source, result_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_id) DO UPDATE SET
+                match_num=excluded.match_num,
+                league_id=excluded.league_id,
+                league_name=excluded.league_name,
+                home_team_id=excluded.home_team_id,
+                away_team_id=excluded.away_team_id,
+                home_team_name=excluded.home_team_name,
+                away_team_name=excluded.away_team_name,
+                match_time=excluded.match_time,
+                match_status=excluded.match_status,
+                match_status_name=excluded.match_status_name,
+                home_score_90=excluded.home_score_90,
+                away_score_90=excluded.away_score_90,
+                result_90=excluded.result_90,
+                half_score=excluded.half_score,
+                full_score_90=excluded.full_score_90,
+                result_source=excluded.result_source,
+                result_updated_at=excluded.result_updated_at,
+                updated_at=datetime('now','localtime')
+            """,
+            params,
+        )
 
 
 def save_match_results(conn: Connection, results: list[dict]) -> int:
@@ -456,21 +903,43 @@ def save_sp_snapshots(conn: Connection, records: list[dict]) -> int:
             continue
 
         inserted += 1
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO sporttery_sp_snapshot
-                (match_id, snapshot_time, play_type, option_code, option_name,
-                 sp_value, goal_line, is_single,
-                 implied_prob_raw, implied_prob_norm, prob_sum, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                r["match_id"], st, r["play_type"], r["option_code"],
-                r.get("option_name"), r["sp_value"], r.get("goal_line"),
-                r.get("is_single", 0), r.get("implied_prob_raw"),
-                r.get("implied_prob_norm"), r.get("prob_sum"), h,
-            ),
+        params = (
+            r["match_id"], st, r["play_type"], r["option_code"],
+            r.get("option_name"), r["sp_value"], r.get("goal_line"),
+            r.get("is_single", 0), r.get("implied_prob_raw"),
+            r.get("implied_prob_norm"), r.get("prob_sum"), h,
         )
+        if conn.backend == "mysql":
+            conn.execute(
+                """
+                INSERT INTO sporttery_sp_snapshot
+                    (match_id, snapshot_time, play_type, option_code, option_name,
+                     sp_value, goal_line, is_single,
+                     implied_prob_raw, implied_prob_norm, prob_sum, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    option_name=VALUES(option_name),
+                    sp_value=VALUES(sp_value),
+                    goal_line=VALUES(goal_line),
+                    is_single=VALUES(is_single),
+                    implied_prob_raw=VALUES(implied_prob_raw),
+                    implied_prob_norm=VALUES(implied_prob_norm),
+                    prob_sum=VALUES(prob_sum),
+                    content_hash=VALUES(content_hash)
+                """,
+                params,
+            )
+        else:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO sporttery_sp_snapshot
+                    (match_id, snapshot_time, play_type, option_code, option_name,
+                     sp_value, goal_line, is_single,
+                     implied_prob_raw, implied_prob_norm, prob_sum, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                params,
+            )
     conn.commit()
     return inserted
 
@@ -574,32 +1043,138 @@ def fetch_matches_for_analysis(conn: Connection, match_date: str | None = None) 
 def save_market_analysis(conn: Connection, analysis: dict) -> None:
     """Save one market structure analysis snapshot."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO sporttery_market_analysis
-            (match_id, analysis_time, window, had_direction, hhad_direction,
-             ttg_direction, consistency_level, main_market_expression,
-             research_priority, risk_flags_json, suggested_focus_json,
-             avoid_focus_json, raw_analysis_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            str(analysis["match_id"]),
-            analysis.get("analysis_time") or now,
-            analysis["window"],
-            analysis.get("had_direction"),
-            analysis.get("hhad_direction"),
-            analysis.get("ttg_direction"),
-            analysis.get("consistency_level"),
-            analysis.get("main_market_expression"),
-            analysis.get("research_priority"),
-            json.dumps(analysis.get("risk_flags", []), ensure_ascii=False),
-            json.dumps(analysis.get("suggested_focus", []), ensure_ascii=False),
-            json.dumps(analysis.get("avoid_focus", []), ensure_ascii=False),
-            json.dumps(analysis, ensure_ascii=False),
-        ),
+    params = (
+        str(analysis["match_id"]),
+        analysis.get("analysis_time") or now,
+        analysis["window"],
+        analysis.get("had_direction"),
+        analysis.get("hhad_direction"),
+        analysis.get("ttg_direction"),
+        analysis.get("consistency_level"),
+        analysis.get("main_market_expression"),
+        analysis.get("research_priority"),
+        json.dumps(analysis.get("risk_flags", []), ensure_ascii=False),
+        json.dumps(analysis.get("suggested_focus", []), ensure_ascii=False),
+        json.dumps(analysis.get("avoid_focus", []), ensure_ascii=False),
+        json.dumps(analysis, ensure_ascii=False),
     )
+    if conn.backend == "mysql":
+        conn.execute(
+            """
+            INSERT INTO sporttery_market_analysis
+                (match_id, analysis_time, window, had_direction, hhad_direction,
+                 ttg_direction, consistency_level, main_market_expression,
+                 research_priority, risk_flags_json, suggested_focus_json,
+                 avoid_focus_json, raw_analysis_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                had_direction=VALUES(had_direction),
+                hhad_direction=VALUES(hhad_direction),
+                ttg_direction=VALUES(ttg_direction),
+                consistency_level=VALUES(consistency_level),
+                main_market_expression=VALUES(main_market_expression),
+                research_priority=VALUES(research_priority),
+                risk_flags_json=VALUES(risk_flags_json),
+                suggested_focus_json=VALUES(suggested_focus_json),
+                avoid_focus_json=VALUES(avoid_focus_json),
+                raw_analysis_json=VALUES(raw_analysis_json)
+            """,
+            params,
+        )
+    else:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO sporttery_market_analysis
+                (match_id, analysis_time, window, had_direction, hhad_direction,
+                 ttg_direction, consistency_level, main_market_expression,
+                 research_priority, risk_flags_json, suggested_focus_json,
+                 avoid_focus_json, raw_analysis_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            params,
+        )
     conn.commit()
+
+
+def save_daily_recommendations(conn: Connection, recommendations: list[dict]) -> int:
+    """Persist fixed pre-match recommendation records for later audit/backtest."""
+    if not recommendations:
+        return 0
+    inserted = 0
+    for rec in recommendations:
+        params = (
+            rec["recommendation_date"],
+            rec.get("generated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            str(rec["match_id"]),
+            rec.get("match_num"),
+            rec.get("league_name"),
+            rec.get("home_team_name"),
+            rec.get("away_team_name"),
+            rec.get("match_time"),
+            rec["recommendation_level"],
+            rec.get("main_play_type"),
+            rec.get("main_option_code"),
+            rec.get("main_option_name"),
+            rec.get("main_sp"),
+            rec.get("score_option_code"),
+            rec.get("score_option_name"),
+            rec.get("score_sp"),
+            json.dumps(rec.get("aux", rec.get("aux_json", {})), ensure_ascii=False),
+            json.dumps(rec.get("gates", rec.get("gates_json", [])), ensure_ascii=False),
+            rec.get("model_version", "sp_structure_v1"),
+            rec.get("sp_snapshot_time"),
+            rec.get("notes"),
+        )
+        if conn.backend == "mysql":
+            cur = conn.execute(
+                """
+                INSERT INTO daily_recommendation
+                    (recommendation_date, generated_at, match_id, match_num,
+                     league_name, home_team_name, away_team_name, match_time,
+                     recommendation_level, main_play_type, main_option_code,
+                     main_option_name, main_sp, score_option_code, score_option_name,
+                     score_sp, aux_json, gates_json, model_version,
+                     sp_snapshot_time, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    match_num=VALUES(match_num),
+                    league_name=VALUES(league_name),
+                    home_team_name=VALUES(home_team_name),
+                    away_team_name=VALUES(away_team_name),
+                    match_time=VALUES(match_time),
+                    recommendation_level=VALUES(recommendation_level),
+                    main_play_type=VALUES(main_play_type),
+                    main_option_code=VALUES(main_option_code),
+                    main_option_name=VALUES(main_option_name),
+                    main_sp=VALUES(main_sp),
+                    score_option_code=VALUES(score_option_code),
+                    score_option_name=VALUES(score_option_name),
+                    score_sp=VALUES(score_sp),
+                    aux_json=VALUES(aux_json),
+                    gates_json=VALUES(gates_json),
+                    model_version=VALUES(model_version),
+                    sp_snapshot_time=VALUES(sp_snapshot_time),
+                    notes=VALUES(notes)
+                """,
+                params,
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT OR REPLACE INTO daily_recommendation
+                    (recommendation_date, generated_at, match_id, match_num,
+                     league_name, home_team_name, away_team_name, match_time,
+                     recommendation_level, main_play_type, main_option_code,
+                     main_option_name, main_sp, score_option_code, score_option_name,
+                     score_sp, aux_json, gates_json, model_version,
+                     sp_snapshot_time, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                params,
+            )
+        inserted += max(cur.rowcount, 0)
+    conn.commit()
+    return inserted
 
 
 def save_betting_ticket(conn: Connection, ticket: dict) -> int:
@@ -711,8 +1286,13 @@ def fetch_betting_tickets(conn: Connection, bet_group: str | None = None) -> lis
 
 
 def _fetch_dicts(cur) -> list[dict]:
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    if isinstance(rows[0], dict):
+        return [dict(row) for row in rows]
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    return [dict(zip(cols, row)) for row in rows]
 
 
 def _ensure_match_result_columns(conn: Connection) -> None:
@@ -751,6 +1331,10 @@ def _ensure_betting_selection_columns(conn: Connection) -> None:
         conn.execute("ALTER TABLE betting_ticket_selection ADD COLUMN sp_snapshot_id INTEGER NULL")
 
 
+def _ensure_daily_recommendation_table(conn: Connection) -> None:
+    conn.execute(DDL_DAILY_RECOMMENDATION)
+
+
 def _ensure_betting_ticket_columns(conn: Connection) -> None:
     existing = {
         row["name"]
@@ -778,6 +1362,8 @@ _sp_hash_column_checked = False
 def _ensure_sp_snapshot_hash_column(conn: Connection) -> None:
     """Add content_hash column to sporttery_sp_snapshot if missing (once)."""
     global _sp_hash_column_checked
+    if conn.backend == "mysql":
+        return
     if _sp_hash_column_checked:
         return
     existing = {

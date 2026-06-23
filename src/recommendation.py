@@ -39,8 +39,22 @@ class RecommendationGate:
 @dataclass(frozen=True)
 class RecommendationCandidates:
     had_options: tuple[str, ...]
+    hhad_options: tuple[str, ...]
     ttg_options: tuple[str, ...]
     crs_options: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class MatchSuggestion:
+    play_type: str
+    selections: tuple[str, ...]
+    market_expression: str
+    confidence: str
+    reason: str
+    risks: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -54,6 +68,7 @@ class MatchRecommendation:
     hhad_trend: PlayTrend
     ttg_trend: PlayTrend
     candidates: RecommendationCandidates
+    suggestions: tuple[MatchSuggestion, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +78,7 @@ class MatchRecommendation:
             "hhad_trend": self.hhad_trend.to_dict(),
             "ttg_trend": self.ttg_trend.to_dict(),
             "candidates": self.candidates.to_dict(),
+            "suggestions": [suggestion.to_dict() for suggestion in self.suggestions],
         }
 
 
@@ -93,7 +109,8 @@ def build_match_recommendation(
     ttg = analyze_play_trend(match_id, "ttg", window, sp_history)
     structure = analyze_market_structure(match_id, window, had, hhad, ttg)
     gate = _build_gate(match_info, sp_history, structure, had, hhad, ttg, now_time=now_time)
-    candidates = _build_candidates(sp_history, structure, had, ttg)
+    candidates = _build_candidates(sp_history, structure, had, hhad, ttg)
+    suggestions = _build_suggestions(gate, structure, had, hhad, ttg, candidates)
     return MatchRecommendation(
         gate=gate,
         structure=structure,
@@ -101,6 +118,7 @@ def build_match_recommendation(
         hhad_trend=hhad,
         ttg_trend=ttg,
         candidates=candidates,
+        suggestions=tuple(suggestions),
     )
 
 
@@ -172,16 +190,47 @@ def _build_candidates(
     sp_history: list[dict],
     structure: MarketStructure,
     had: PlayTrend,
+    hhad: PlayTrend,
     ttg: PlayTrend,
 ) -> RecommendationCandidates:
     had_options = _had_candidates(had)
+    hhad_options = _hhad_candidates(hhad)
     ttg_options = _ttg_candidates(sp_history, ttg)
     crs_options = _crs_candidates(sp_history, structure, had_options, ttg_options)
     return RecommendationCandidates(
         had_options=tuple(had_options),
+        hhad_options=tuple(hhad_options),
         ttg_options=tuple(ttg_options),
         crs_options=tuple(crs_options),
     )
+
+
+def _build_suggestions(
+    gate: RecommendationGate,
+    structure: MarketStructure,
+    had: PlayTrend,
+    hhad: PlayTrend,
+    ttg: PlayTrend,
+    candidates: RecommendationCandidates,
+) -> list[MatchSuggestion]:
+    if not gate.allowed:
+        return []
+
+    risk_codes = tuple(risk.code for risk in structure.risk_flags[:3])
+    suggestions: list[MatchSuggestion] = []
+
+    result_suggestion = _result_suggestion(
+        structure,
+        had,
+        hhad,
+        candidates.had_options,
+        candidates.hhad_options,
+        risk_codes,
+    )
+    if result_suggestion is not None:
+        suggestions.append(result_suggestion)
+
+    return suggestions
 
 
 def _had_candidates(had: PlayTrend) -> list[str]:
@@ -199,6 +248,16 @@ def _had_candidates(had: PlayTrend) -> list[str]:
     if "away_unbeaten" in direction:
         return ["D", "A"]
     return []
+
+
+def _hhad_candidates(hhad: PlayTrend) -> list[str]:
+    if not hhad.available:
+        return []
+    return {
+        "handicap_home_strengthening": ["H"],
+        "handicap_draw_strengthening": ["D"],
+        "handicap_away_strengthening": ["A"],
+    }.get(hhad.main_direction, [])
 
 
 def _ttg_candidates(sp_history: list[dict], ttg: PlayTrend) -> list[str]:
@@ -249,6 +308,64 @@ def _crs_candidates(
         scored.append(row)
     ranked = sorted(scored, key=lambda row: -(row.get("implied_prob_norm") or 0))
     return [str(row["option_code"]) for row in ranked[:3]]
+
+
+def _result_suggestion(
+    structure: MarketStructure,
+    had: PlayTrend,
+    hhad: PlayTrend,
+    had_options: tuple[str, ...],
+    hhad_options: tuple[str, ...],
+    risk_codes: tuple[str, ...],
+) -> MatchSuggestion | None:
+    play_type = "had"
+    selections = had_options
+    direction = had.main_direction
+
+    if (
+        hhad.available
+        and hhad_options
+        and structure.main_market_expression in {"home_big_win_supported", "away_not_lose_or_small_win_supported"}
+        and hhad.main_direction in {"handicap_home_strengthening", "handicap_away_strengthening"}
+    ):
+        play_type = "hhad"
+        selections = hhad_options
+        direction = hhad.main_direction
+
+    if play_type == "had" and (not had.available or not had_options):
+        return None
+    if play_type == "hhad" and (not hhad.available or not hhad_options):
+        return None
+    if play_type == "had" and "had" not in structure.suggested_focus and structure.main_market_expression == "mixed_or_noisy":
+        return None
+    allowed_directions = {
+        "had": {
+            "home_win_strengthening",
+            "away_win_strengthening",
+            "draw_strengthening",
+            "home_unbeaten_strengthening",
+            "away_unbeaten_strengthening",
+        },
+        "hhad": {
+            "handicap_home_strengthening",
+            "handicap_away_strengthening",
+        },
+    }
+    if direction not in allowed_directions[play_type]:
+        return None
+
+    reason = f"{'让球胜平负' if play_type == 'hhad' else '胜平负'}方向={direction}"
+    if hhad.available and hhad.main_direction != "no_clear_direction":
+        reason += f"，让球方向={hhad.main_direction}"
+
+    return MatchSuggestion(
+        play_type=play_type,
+        selections=selections,
+        market_expression=structure.main_market_expression,
+        confidence=structure.research_priority,
+        reason=reason,
+        risks=risk_codes,
+    )
 
 
 def _latest_snapshot_time(sp_history: list[dict]) -> str | None:

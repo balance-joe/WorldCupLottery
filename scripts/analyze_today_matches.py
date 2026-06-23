@@ -47,11 +47,9 @@ def main():
             match_id = str(match.get("match_id"))
             sp_history = db.fetch_all_sp_history(conn, [match_id])
             detail_bundle = None
-            detail_error_count = 0
             if args.with_detail:
                 if args.fetch_detail:
-                    detail_bundle, detail_errors = api_client.fetch_match_detail_bundle(match_id)
-                    detail_error_count = len(detail_errors)
+                    detail_bundle, _ = api_client.fetch_match_detail_bundle(match_id)
                     for source_name, payload in detail_bundle.items():
                         db.save_raw_snapshot(conn, source_name, api_client.DETAIL_APIS[source_name], payload, match_id, {"matchId": match_id})
                 elif args.detail_dir:
@@ -68,7 +66,20 @@ def main():
                 detail_bundle=detail_bundle,
             )
             structure = result["market_structures"][args.window]
-            recommendation = build_match_recommendation(match, sp_history, window=args.window)
+            recommendation = build_match_recommendation(
+                match,
+                sp_history,
+                window=args.window,
+                now_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            main_play, main_pick = _main_result_pick(recommendation)
+            score_pick = _score_pick(recommendation, main_pick)
+            goal_range = _goal_range(recommendation)
+            hafu_pick = _hafu_pick(sp_history)
+            half_result_pick = _half_result_pick(sp_history)
+            report_class = _report_class(main_pick, goal_range)
+            main_pick_sp = _main_pick_sp(recommendation, main_play, main_pick)
+            had_bucket = _had_bucket(main_play, main_pick, main_pick_sp)
             rows.append({
                 "match_num": match.get("match_num") or "",
                 "league": match.get("league_name") or "",
@@ -86,32 +97,212 @@ def main():
                 "non_sp_lean": (result.get("non_sp_evidence") or {}).get("non_sp_lean", "-"),
                 "support_confidence": (result.get("non_sp_evidence") or {}).get("support_confidence", "-"),
                 "blend_reason": (result.get("non_sp_blend_summary") or {}).get("reason", "-"),
-                "detail_errors": detail_error_count,
                 "gate_allowed": recommendation.gate.allowed,
                 "allowed_plays": ",".join(recommendation.gate.allowed_plays) or "-",
                 "gate_reasons": ",".join(recommendation.gate.reasons) or "-",
-                "had_options": ",".join(recommendation.candidates.had_options) or "-",
-                "ttg_options": ",".join(recommendation.candidates.ttg_options) or "-",
-                "crs_options": ",".join(recommendation.candidates.crs_options) or "-",
+                "report_class": report_class,
+                "had_bucket": had_bucket,
+                "main_play": main_play or "-",
+                "main_pick": main_pick or "-",
+                "main_pick_sp": main_pick_sp,
+            "score_pick": score_pick or "-",
+                "score_sp": _latest_option_sp(sp_history, "crs", score_pick) if score_pick else None,
+                "goal_range": goal_range or "-",
+                "hafu_pick": hafu_pick or "-",
+                "half_result_pick": half_result_pick or "-",
             })
 
-        rows.sort(key=lambda row: (PRIORITY_RANK.get(row["final_research_priority"], 9), row["match_time"]))
+        rows.sort(key=lambda row: (
+            _report_sort_rank(row["report_class"], row["had_bucket"]),
+            PRIORITY_RANK.get(row["final_research_priority"], 9),
+            row["main_pick_sp"] if row["main_pick_sp"] is not None else 999.0,
+            row["match_time"],
+        ))
         print(f"比赛日期: {match_date}  场次: {len(rows)}")
         for row in rows:
+            sp_text = f"{row['main_pick_sp']:.2f}" if row["main_pick_sp"] is not None else "-"
+            main_text = f"{row['main_play']}:{row['main_pick']}" if row["main_play"] != "-" and row["main_pick"] != "-" else "-"
+            ticket_text = f"{main_text} @ {sp_text}" if main_text != "-" else "不买"
+            score_ticket_text = (
+                f"crs:{row['score_pick']} @ {row['score_sp']:.2f}"
+                if row["score_pick"] != "-" and row["score_sp"] is not None
+                else "不买"
+            )
+            assist_text = (
+                f"进球:{row['goal_range']} 半场:{row['half_result_pick']} 半全场:{row['hafu_pick']}"
+                if row["report_class"] != "过滤场"
+                else "-"
+            )
             print(
                 f"{row['match_num']} {row['league']} {row['home_team']} vs {row['away_team']} "
                 f"{row['match_time']} 优先级:{row['final_research_priority']}"
                 f"(SP:{row['sp_research_priority']}) "
-                f"市场表达:{row['main_market_expression']} "
-                f"胜平负:{row['had_direction']} 让球:{row['hhad_direction']} 总进球:{row['ttg_direction']} "
-                f"风险:{row['top_risk_flags'] or '-'} 关注:{row['suggested_focus'] or '-'} "
-                f"非SP:{row['non_sp_lean']}/{row['support_confidence']} 校正:{row['blend_reason']} "
-                f"可买:{'Y' if row['gate_allowed'] else 'N'} 玩法:{row['allowed_plays']} "
-                f"候选:HAD={row['had_options']} TTG={row['ttg_options']} CRS={row['crs_options']} "
+                f"分类:{row['report_class']} 分层:{row['had_bucket']} "
+                f"正式主票:{ticket_text} 正式比分小票:{score_ticket_text} "
+                f"市场表达:{row['main_market_expression']} 风险:{row['top_risk_flags'] or '-'} "
                 f"门禁:{row['gate_reasons']}"
+            )
+            print(
+                f"  辅助观察:{assist_text} "
+                f"方向:胜平负={row['had_direction']} 让球={row['hhad_direction']} 总进球={row['ttg_direction']} "
+                f"非SP:{row['non_sp_lean']}/{row['support_confidence']} 校正:{row['blend_reason']}"
             )
     finally:
         conn.close()
+
+
+def _main_pick(recommendation) -> str | None:
+    _, pick = _main_result_pick(recommendation)
+    return pick
+
+
+def _main_result_pick(recommendation) -> tuple[str | None, str | None]:
+    for suggestion in getattr(recommendation, "suggestions", ()):
+        if suggestion.play_type not in {"had", "hhad"} or len(suggestion.selections) != 1:
+            continue
+        pick = suggestion.selections[0]
+        sp_value = _pick_sp(recommendation, suggestion.play_type, pick)
+        if suggestion.play_type == "had" and pick == "A" and sp_value is not None and sp_value >= 1.60:
+            return None, None
+        return suggestion.play_type, pick
+
+    if not recommendation.gate.allowed:
+        return None, None
+    if len(recommendation.candidates.had_options) != 1:
+        return None, None
+    pick = recommendation.candidates.had_options[0]
+    sp_value = _pick_sp(recommendation, "had", pick)
+    if pick == "A" and sp_value is not None and sp_value >= 1.60:
+        return None, None
+    return "had", pick
+
+
+def _score_pick(recommendation, main_pick: str | None) -> str | None:
+    if not recommendation.gate.allowed:
+        return None
+    if not main_pick:
+        return None
+    if recommendation.candidates.crs_options:
+        return recommendation.candidates.crs_options[0]
+    return None
+
+
+def _goal_range(recommendation) -> str | None:
+    if not recommendation.gate.allowed:
+        return None
+    if recommendation.candidates.ttg_options:
+        return "/".join(recommendation.candidates.ttg_options)
+    return None
+
+
+def _hafu_pick(sp_history: list[dict]) -> str | None:
+    latest = _latest_play_snapshot(sp_history, "hafu")
+    if not latest:
+        return None
+    best = max(
+        latest,
+        key=lambda row: (
+            row.get("implied_prob_norm") or 0,
+            -float(row.get("sp_value") or 999),
+        ),
+    )
+    return str(best.get("option_code")).lower()
+
+
+def _half_result_pick(sp_history: list[dict]) -> str | None:
+    latest = _latest_play_snapshot(sp_history, "hafu")
+    if not latest:
+        return None
+    buckets = {"H": 0.0, "D": 0.0, "A": 0.0}
+    for row in latest:
+        code = str(row.get("option_code", "")).lower()
+        if len(code) != 2 or code[0] not in {"h", "d", "a"}:
+            continue
+        half = {"h": "H", "d": "D", "a": "A"}[code[0]]
+        buckets[half] += float(row.get("implied_prob_norm") or 0)
+    if not any(buckets.values()):
+        return None
+    return max(buckets.items(), key=lambda item: item[1])[0]
+
+
+def _latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
+    records = [record for record in sp_history if str(record.get("play_type", "")).lower() == play_type]
+    if not records:
+        return []
+    latest_time = max((str(record.get("snapshot_time", "")) for record in records), default="")
+    return [record for record in records if str(record.get("snapshot_time", "")) == latest_time]
+
+
+def _latest_option_sp(sp_history: list[dict], play_type: str, option_code: str | None) -> float | None:
+    if not option_code:
+        return None
+    for row in _latest_play_snapshot(sp_history, play_type):
+        if str(row.get("option_code")) == option_code:
+            try:
+                return float(row.get("sp_value"))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _main_pick_sp(recommendation, main_play: str | None, main_pick: str | None) -> float | None:
+    if not main_play or not main_pick:
+        return None
+    return _pick_sp(recommendation, main_play, main_pick)
+
+
+def _pick_sp(recommendation, play_type: str, pick: str | None) -> float | None:
+    if not pick:
+        return None
+    trend = recommendation.hhad_trend if play_type == "hhad" else recommendation.had_trend
+    for option in trend.options:
+        if option.option_code == pick:
+            return option.sp_end
+    return None
+
+
+def _had_bucket(main_play: str | None, main_pick: str | None, main_pick_sp: float | None) -> str:
+    if main_play == "hhad":
+        return {"H": "让胜", "D": "让平", "A": "让负"}.get(main_pick or "", "让球")
+    if main_pick == "H":
+        if main_pick_sp is not None and main_pick_sp < 1.60:
+            return "低SP主胜"
+        return "中高SP主胜"
+    if main_pick == "A":
+        if main_pick_sp is not None and main_pick_sp < 1.60:
+            return "低SP客胜"
+        return "高SP客胜"
+    if main_pick == "D":
+        return "平局"
+    return "-"
+
+
+def _report_class(main_pick: str | None, goal_range: str | None) -> str:
+    if main_pick:
+        return "主推场"
+    if goal_range:
+        return "观察场"
+    return "过滤场"
+
+
+def _report_sort_rank(report_class: str, had_bucket: str) -> tuple[int, int]:
+    class_rank = {
+        "主推场": 0,
+        "观察场": 1,
+        "过滤场": 2,
+    }.get(report_class, 9)
+    bucket_rank = {
+        "低SP主胜": 0,
+        "低SP客胜": 1,
+        "中高SP主胜": 2,
+        "高SP客胜": 3,
+        "让胜": 4,
+        "让负": 5,
+        "让平": 6,
+        "平局": 7,
+        "-": 9,
+    }.get(had_bucket, 9)
+    return class_rank, bucket_rank
 
 
 if __name__ == "__main__":
