@@ -52,6 +52,7 @@ class MatchSuggestion:
     confidence: str
     reason: str
     risks: tuple[str, ...]
+    gate_passed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -210,22 +211,31 @@ def _build_suggestions(
     ttg: PlayTrend,
     candidates: RecommendationCandidates,
 ) -> list[MatchSuggestion]:
-    if not gate.allowed:
-        return []
-
     risk_codes = tuple(risk.code for risk in structure.risk_flags[:3])
     suggestions: list[MatchSuggestion] = []
 
+    # 1. 胜负平建议（HAD 或 HHAD）
     result_suggestion = _result_suggestion(
-        structure,
-        had,
-        hhad,
-        candidates.had_options,
-        candidates.hhad_options,
-        risk_codes,
+        structure, had, hhad,
+        candidates.had_options, candidates.hhad_options,
+        risk_codes, gate,
     )
     if result_suggestion is not None:
         suggestions.append(result_suggestion)
+
+    # 2. 比分建议（CRS）
+    crs_suggestion = _crs_suggestion(
+        structure, candidates.crs_options, risk_codes, gate,
+    )
+    if crs_suggestion is not None:
+        suggestions.append(crs_suggestion)
+
+    # 3. 进球数建议（TTG）
+    ttg_suggestion = _ttg_suggestion(
+        structure, ttg, candidates.ttg_options, risk_codes, gate,
+    )
+    if ttg_suggestion is not None:
+        suggestions.append(ttg_suggestion)
 
     return suggestions
 
@@ -314,6 +324,7 @@ def _result_suggestion(
     had_options: tuple[str, ...],
     hhad_options: tuple[str, ...],
     risk_codes: tuple[str, ...],
+    gate: RecommendationGate,
 ) -> MatchSuggestion | None:
     play_type = "had"
     selections = had_options
@@ -362,6 +373,61 @@ def _result_suggestion(
         confidence=structure.research_priority,
         reason=reason,
         risks=risk_codes,
+        gate_passed=play_type in gate.allowed_plays,
+    )
+
+
+def _crs_suggestion(
+    structure: MarketStructure,
+    crs_options: tuple[str, ...],
+    risk_codes: tuple[str, ...],
+    gate: RecommendationGate,
+) -> MatchSuggestion | None:
+    """比分建议：基于 CRS 候选选项生成。"""
+    if not crs_options:
+        return None
+
+    gate_passed = "crs" in gate.allowed_plays
+    reason = f"比分候选: {', '.join(crs_options[:3])}"
+    if not gate_passed:
+        reason += "（门禁未通过，仅观察）"
+
+    return MatchSuggestion(
+        play_type="crs",
+        selections=crs_options[:3],
+        market_expression=structure.main_market_expression,
+        confidence=structure.research_priority,
+        reason=reason,
+        risks=risk_codes,
+        gate_passed=gate_passed,
+    )
+
+
+def _ttg_suggestion(
+    structure: MarketStructure,
+    ttg: PlayTrend,
+    ttg_options: tuple[str, ...],
+    risk_codes: tuple[str, ...],
+    gate: RecommendationGate,
+) -> MatchSuggestion | None:
+    """进球数建议：基于 TTG 候选选项生成。"""
+    if not ttg_options:
+        return None
+
+    gate_passed = "ttg" in gate.allowed_plays
+    direction = ttg.main_direction if ttg.available else "unknown"
+    reason = f"进球方向={direction}，候选: {', '.join(ttg_options)}"
+    if not gate_passed:
+        reason += "（门禁未通过，仅观察）"
+
+    return MatchSuggestion(
+        play_type="ttg",
+        selections=ttg_options,
+        market_expression=structure.main_market_expression,
+        confidence=structure.research_priority,
+        reason=reason,
+        risks=risk_codes,
+        gate_passed=gate_passed,
     )
 
 

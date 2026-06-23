@@ -76,9 +76,18 @@ class RecommendationTest(unittest.TestCase):
         self.assertEqual(recommendation.candidates.hhad_options, ("H",))
         self.assertIn("3", recommendation.candidates.ttg_options)
         self.assertEqual(recommendation.candidates.crs_options[:2], ("s02s00", "s02s01"))
-        self.assertEqual(len(recommendation.suggestions), 1)
+        # 现在返回三个建议：胜负平 + 比分 + 进球数
+        self.assertEqual(len(recommendation.suggestions), 3)
+        # 第一个：胜负平（hhad，因为三线一致）
         self.assertEqual(recommendation.suggestions[0].play_type, "hhad")
         self.assertEqual(recommendation.suggestions[0].selections, ("H",))
+        self.assertTrue(recommendation.suggestions[0].gate_passed)
+        # 第二个：比分
+        self.assertEqual(recommendation.suggestions[1].play_type, "crs")
+        self.assertTrue(recommendation.suggestions[1].gate_passed)
+        # 第三个：进球数
+        self.assertEqual(recommendation.suggestions[2].play_type, "ttg")
+        self.assertTrue(recommendation.suggestions[2].gate_passed)
 
 
 if __name__ == "__main__":

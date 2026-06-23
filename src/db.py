@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from decimal import Decimal
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -499,8 +500,9 @@ class Row(dict):
     """字典行，同时支持像sqlite3.Row那样的位置索引。"""
 
     def __init__(self, values: Iterable, columns: list[str]):
-        super().__init__(zip(columns, values))
-        self._values = tuple(values)
+        converted = tuple(_db_value(value) for value in values)
+        super().__init__(zip(columns, converted))
+        self._values = converted
 
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -610,6 +612,12 @@ class Connection:
 def _mysqlize_sql(sql: str) -> str:
     """将项目的SQLite风格占位符转换为PyMySQL兼容格式。"""
     return sql.replace("?", "%s")
+
+
+def _db_value(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
 
 
 def get_connection() -> Connection:

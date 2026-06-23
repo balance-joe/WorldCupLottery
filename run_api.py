@@ -156,6 +156,159 @@ def db_summary() -> dict[str, Any]:
     }
 
 
+@app.get("/api/matches")
+def api_matches(date: str | None = None) -> dict[str, Any]:
+    """返回指定日期的比赛列表（含 SP 分析摘要）。"""
+    from datetime import datetime as _dt
+    from src.recommendation import build_match_recommendation, latest_option_sp
+    from src.market_structure import PRIORITY_RANK
+
+    match_date = date or _dt.now().strftime("%Y-%m-%d")
+    try:
+        conn = db.get_connection()
+        db.ensure_tables(conn)
+        matches = db.fetch_matches_for_analysis(conn, match_date=match_date)
+        results = []
+        for match in matches:
+            match_id = str(match.get("match_id"))
+            sp_history = db.fetch_all_sp_history(conn, [match_id])
+            try:
+                recommendation = build_match_recommendation(
+                    match, sp_history, window="open_to_latest",
+                    now_time=_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                # 主推
+                main_play = main_pick = main_sp = None
+                for s in getattr(recommendation, "suggestions", ()):
+                    if s.play_type in {"had", "hhad"} and len(s.selections) == 1:
+                        main_play, main_pick = s.play_type, s.selections[0]
+                        for opt in (recommendation.hhad_trend.options if s.play_type == "hhad" else recommendation.had_trend.options):
+                            if opt.option_code == main_pick:
+                                main_sp = opt.sp_end
+                                break
+                        break
+                # 比分
+                score_pick = score_sp = None
+                if recommendation.candidates.crs_options:
+                    score_pick = recommendation.candidates.crs_options[0]
+                    score_sp = latest_option_sp(sp_history, "crs", score_pick)
+                # 进球范围
+                goal_range = "/".join(recommendation.candidates.ttg_options) if recommendation.candidates.ttg_options else None
+
+                priority = recommendation.structure.research_priority
+                gate = recommendation.gate
+            except Exception:
+                main_play = main_pick = main_sp = score_pick = score_sp = goal_range = None
+                priority = "D"
+                gate = None
+
+            results.append({
+                "match_id": match_id,
+                "match_num": match.get("match_num") or "",
+                "league_name": match.get("league_name") or "",
+                "home_team": match.get("home_team_name") or "",
+                "away_team": match.get("away_team_name") or "",
+                "match_time": match.get("match_time") or "",
+                "match_status": match.get("match_status") or "",
+                "home_score": match.get("home_score_90"),
+                "away_score": match.get("away_score_90"),
+                "result_90": match.get("result_90") or "",
+                "priority": priority,
+                "main_play": main_play,
+                "main_pick": main_pick,
+                "main_sp": main_sp,
+                "score_pick": score_pick,
+                "score_sp": score_sp,
+                "goal_range": goal_range,
+                "gate_allowed": gate.allowed if gate else False,
+                "gate_priority": gate.priority if gate else "D",
+            })
+        # 按优先级排序
+        priority_order = {"A": 0, "B": 1, "C": 2, "D": 3}
+        results.sort(key=lambda r: (priority_order.get(r["priority"], 9), r.get("match_time") or ""))
+        conn.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {"date": match_date, "matches": results, "total": len(results)}
+
+
+@app.get("/api/matches/{match_id}")
+def api_match_detail(match_id: str) -> dict[str, Any]:
+    """返回单场比赛详情（含 SP 历史 + 分析）。"""
+    from datetime import datetime as _dt
+    from src.structure_analysis import analyze_match_windows
+    from src.recommendation import build_match_recommendation
+
+    try:
+        conn = db.get_connection()
+        db.ensure_tables(conn)
+        match = db.fetch_match(conn, match_id)
+        if not match:
+            raise HTTPException(status_code=404, detail="Match not found")
+        sp_history = db.fetch_all_sp_history(conn, [match_id])
+        analysis = analyze_match_windows(match, sp_history, windows=("open_to_latest",), include_debug=True)
+        recommendation = build_match_recommendation(
+            match, sp_history, window="open_to_latest",
+            now_time=_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        conn.close()
+        return {
+            "match": {
+                "match_id": match_id,
+                "match_num": match.get("match_num") or "",
+                "league_name": match.get("league_name") or "",
+                "home_team": match.get("home_team_name") or "",
+                "away_team": match.get("away_team_name") or "",
+                "match_time": match.get("match_time") or "",
+                "match_status": match.get("match_status") or "",
+                "home_score": match.get("home_score_90"),
+                "away_score": match.get("away_score_90"),
+                "result_90": match.get("result_90") or "",
+            },
+            "analysis": analysis,
+            "recommendation": recommendation.to_dict(),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+
+@app.get("/api/matches/{match_id}/sp-history")
+def api_sp_history(match_id: str, play_type: str = "had") -> dict[str, Any]:
+    """返回指定比赛的 SP 历史（用于图表渲染）。"""
+    try:
+        conn = db.get_connection()
+        db.ensure_tables(conn)
+        records = db.fetch_sp_history(conn, [match_id], play_type=play_type)
+        conn.close()
+        # 按 option_code 分组
+        series: dict[str, list] = {}
+        for r in records:
+            code = str(r.get("option_code", ""))
+            series.setdefault(code, []).append({
+                "time": str(r.get("snapshot_time", "")),
+                "sp": float(r.get("sp_value", 0)),
+                "prob": float(r.get("implied_prob_norm") or 0),
+            })
+        return {"match_id": match_id, "play_type": play_type, "series": series}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+
+@app.get("/api/tickets")
+def api_tickets(bet_group: str | None = None) -> dict[str, Any]:
+    """返回投注票列表。"""
+    try:
+        conn = db.get_connection()
+        db.ensure_tables(conn)
+        tickets = db.fetch_betting_tickets(conn, bet_group=bet_group)
+        conn.close()
+        return {"tickets": tickets, "total": len(tickets)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+
+
 if __name__ == "__main__":
     import uvicorn
 

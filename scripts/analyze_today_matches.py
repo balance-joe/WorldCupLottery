@@ -191,7 +191,7 @@ def _goal_range(recommendation) -> str | None:
 
 
 def _hafu_pick(sp_history: list[dict]) -> str | None:
-    latest = latest_play_snapshot(sp_history, "hafu")
+    latest = _latest_play_snapshot(sp_history, "hafu")
     if not latest:
         return None
     best = max(
@@ -205,7 +205,7 @@ def _hafu_pick(sp_history: list[dict]) -> str | None:
 
 
 def _half_result_pick(sp_history: list[dict]) -> str | None:
-    latest = latest_play_snapshot(sp_history, "hafu")
+    latest = _latest_play_snapshot(sp_history, "hafu")
     if not latest:
         return None
     buckets = {"H": 0.0, "D": 0.0, "A": 0.0}
@@ -224,6 +224,19 @@ def _main_pick_sp(recommendation, main_play: str | None, main_pick: str | None) 
     if not main_play or not main_pick:
         return None
     return _pick_sp(recommendation, main_play, main_pick)
+
+
+def _latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
+    latest_time = max(
+        (str(row.get("snapshot_time", "")) for row in sp_history if row.get("play_type") == play_type),
+        default="",
+    )
+    if not latest_time:
+        return []
+    return [
+        row for row in sp_history
+        if row.get("play_type") == play_type and str(row.get("snapshot_time", "")) == latest_time
+    ]
 
 
 def _pick_sp(recommendation, play_type: str, pick: str | None) -> float | None:
