@@ -1,7 +1,7 @@
 """
-Sporttery data fetcher CLI.
+竞彩数据抓取命令行工具。
 
-Usage:
+用法:
     python -m scripts.fetch_sporttery --mode today
     python -m scripts.fetch_sporttery --mode match --match-id 2040162
     python -m scripts.fetch_sporttery --mode all
@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Ensure project root is on sys.path
+# 确保项目根目录在 sys.path 中
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -27,7 +27,7 @@ probability = None
 db = None
 
 
-# ── Stats collector ──────────────────────────────────────────────────────────
+# ── 统计收集器 ─────────────────────────────────────────────────────────────
 
 class Stats:
     def __init__(self):
@@ -72,10 +72,10 @@ class Stats:
         print("=" * 60)
 
 
-# ── Save helper ──────────────────────────────────────────────────────────────
+# ── 存储辅助函数 ───────────────────────────────────────────────────────────
 
 def _save_raw(conn, source: str, url: str, raw: dict, match_id: str | None = None, params: dict | None = None) -> bool:
-    """Save raw snapshot and return True if new row inserted."""
+    """保存原始快照，返回 True 表示插入了新行。"""
     try:
         return db.save_raw_snapshot(conn, source, url, raw, match_id, params)
     except Exception as e:
@@ -85,7 +85,7 @@ def _save_raw(conn, source: str, url: str, raw: dict, match_id: str | None = Non
 
 def _log_api_error(conn, endpoint: str, error: str, stats: Stats,
                    match_id: str | None = None, params: dict | None = None) -> None:
-    """Persist an API error to the database and count it."""
+    """将 API 错误持久化到数据库并计数。"""
     try:
         db.save_api_error(conn, endpoint, error, match_id=match_id, request_params=params)
         stats.api_errors_logged += 1
@@ -93,10 +93,10 @@ def _log_api_error(conn, endpoint: str, error: str, stats: Stats,
         print(f"  ⚠ error logging failed: {e}")
 
 
-# ── Mode: match (single match) ───────────────────────────────────────────────
+# ── 模式: match（单场比赛）─────────────────────────────────────────────────
 
 def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
-    """Fetch SP for a single match. Returns SP records."""
+    """抓取单场比赛的 SP 赔率。返回 SP 记录列表。"""
     print(f"\n抓取 SP: match_id={match_id}")
     stats.api_calls += 1
 
@@ -109,7 +109,7 @@ def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
 
     _save_raw(conn, "fixedBonus", f"matchId={match_id}", raw, match_id)
 
-    # Schema validation
+    # 数据结构校验
     warnings = parsers.validate_fixed_bonus_schema(raw, match_id)
     for w in warnings:
         stats.schema_warnings.append(w)
@@ -123,7 +123,7 @@ def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
 
     records = probability.calc_implied_prob(records)
 
-    # Check for missing fields
+    # 检查缺失字段
     for r in records:
         if r["sp_value"] is None:
             stats.missing_fields.append(f"match_id={match_id} play={r['play_type']} option={r['option_code']}: sp_value is None")
@@ -134,7 +134,7 @@ def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
     stats.snapshots_inserted += inserted
     stats.sp_deduped += deduped
 
-    # Group for display
+    # 按玩法分组展示
     by_play = {}
     for r in records:
         by_play.setdefault(r["play_type"], []).append(r)
@@ -153,10 +153,10 @@ def run_match(match_id: str, conn, stats: Stats) -> list[dict]:
     return records
 
 
-# ── Mode: today (match list + all SP) ────────────────────────────────────────
+# ── 模式: today（赛事列表 + 全部 SP）───────────────────────────────────────
 
 def run_today(conn, stats: Stats) -> None:
-    """Fetch match list and all SP data."""
+    """抓取赛事列表和全部 SP 数据。"""
     print("抓取关注赛事列表...")
     stats.api_calls += 1
 
@@ -169,7 +169,7 @@ def run_today(conn, stats: Stats) -> None:
 
     _save_raw(conn, "matchList", "method=concern", raw)
 
-    # Schema validation
+    # 数据结构校验
     warnings = parsers.validate_match_list_schema(raw)
     for w in warnings:
         stats.schema_warnings.append(w)
@@ -183,12 +183,12 @@ def run_today(conn, stats: Stats) -> None:
         stats.missing_fields.append("matchList: subMatchList 为空")
         return
 
-    # Save matches
+    # 保存比赛数据
     saved = db.save_matches(conn, matches)
     stats.matches_saved = saved
     print(f"入库 {saved} 场比赛\n")
 
-    # Fetch SP for each match
+    # 逐场抓取 SP 赔率
     all_records = []
     for i, m in enumerate(matches, 1):
         mid = m["match_id"]
@@ -198,11 +198,11 @@ def run_today(conn, stats: Stats) -> None:
         records = run_match(mid, conn, stats)
         all_records.extend(records)
 
-        # Rate limit: 0.3s between requests
+        # 限速: 请求间隔 0.3 秒
         if i < len(matches):
             time.sleep(0.3)
 
-    # Summary by play type
+    # 按玩法汇总
     if all_records:
         by_play = {}
         for r in all_records:
@@ -212,12 +212,12 @@ def run_today(conn, stats: Stats) -> None:
             print(f"  {pt}: {len(recs)} 条")
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── 主入口 ─────────────────────────────────────────────────────────────────
 
 def main():
     global api_client, parsers, probability, db
 
-    parser = argparse.ArgumentParser(description="Sporttery data fetcher")
+    parser = argparse.ArgumentParser(description="竞彩数据抓取工具")
     parser.add_argument("--mode", choices=["today", "match", "all"], default="today",
                         help="today=抓关注列表+SP, match=单场SP, all=同today")
     parser.add_argument("--match-id", type=str, help="单场模式的 matchId")
@@ -250,7 +250,7 @@ def main():
     probability = _probability
     db = _db
 
-    # Connect to DB
+    # 连接数据库
     try:
         conn = db.get_connection()
         print(f"已连接数据库: {conn.backend}")

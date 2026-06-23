@@ -46,16 +46,6 @@ async function refreshAll() {
   await Promise.all([refreshStatus(), refreshDb(), refreshLogs()]);
 }
 
-document.getElementById("startBtn").addEventListener("click", async () => {
-  await request("/api/fetch/start", { method: "POST" });
-  await refreshAll();
-});
-
-document.getElementById("stopBtn").addEventListener("click", async () => {
-  await request("/api/fetch/stop", { method: "POST" });
-  await refreshAll();
-});
-
 document.getElementById("refreshBtn").addEventListener("click", refreshAll);
 
 refreshAll();

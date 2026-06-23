@@ -1,11 +1,11 @@
-"""Parse raw API responses into flat record dicts."""
+"""将原始 API 响应解析为扁平化的记录字典。"""
 
 from __future__ import annotations
 
 from datetime import datetime
 
 
-# ── Schema validation ─────────────────────────────────────────────────────────
+# ── Schema 验证 ─────────────────────────────────────────────────────────
 
 _MATCH_REQUIRED_TOP = {"value"}
 _MATCH_REQUIRED_VALUE = {"matchInfoList"}
@@ -19,15 +19,15 @@ _FIXED_BONUS_REQUIRED_VALUE = {"oddsHistory"}
 
 
 def validate_match_list_schema(raw: dict) -> list[str]:
-    """Check top-level structure of a matchList response.
+    """检查 matchList 响应的顶层结构。
 
-    Returns a list of human-readable warnings; empty means valid.
+    返回可读的警告列表；空列表表示有效。
     """
     warnings: list[str] = []
     for key in _MATCH_REQUIRED_TOP:
         if key not in raw:
             warnings.append(f"matchList: missing top-level key '{key}'")
-            return warnings  # can't go deeper
+            return warnings  # 无法继续深入
 
     value = raw["value"]
     for key in _MATCH_REQUIRED_VALUE:
@@ -39,17 +39,17 @@ def validate_match_list_schema(raw: dict) -> list[str]:
             for key in _MATCH_REQUIRED_SUB:
                 if key not in m:
                     warnings.append(f"matchList.subMatch item: missing '{key}'")
-                    break  # one warning per match is enough
-            break  # only validate first match to avoid flooding
+                    break  # 每场比赛只需一条警告
+            break  # 仅验证第一场比赛，避免信息过多
         break
 
     return warnings
 
 
 def validate_fixed_bonus_schema(raw: dict, match_id: str | int) -> list[str]:
-    """Check top-level structure of a fixedBonus response.
+    """检查 fixedBonus 响应的顶层结构。
 
-    Returns a list of human-readable warnings; empty means valid.
+    返回可读的警告列表；空列表表示有效。
     """
     warnings: list[str] = []
     for key in _FIXED_BONUS_REQUIRED_TOP:
@@ -67,9 +67,9 @@ def validate_fixed_bonus_schema(raw: dict, match_id: str | int) -> list[str]:
 
 def parse_match_list(raw: dict) -> list[dict]:
     """
-    Extract match basic info from getMatchDataPageListV1 response.
+    从 getMatchDataPageListV1 响应中提取比赛基本信息。
 
-    Returns list of dicts with keys:
+    返回字典列表，包含以下键：
         match_id, match_num, league_id, league_name,
         home_team_id, away_team_id, home_team_name, away_team_name,
         match_time, match_status
@@ -102,12 +102,12 @@ def parse_match_list(raw: dict) -> list[dict]:
 
 def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
     """
-    Extract had / hhad / ttg SP records from getFixedBonusV1 response.
+    从 getFixedBonusV1 响应中提取 had / hhad / ttg 的 SP 记录。
 
-    The API returns SP change history — each list item has its own
-    updateDate + updateTime. We use that as snapshot_time.
+    API 返回 SP 变更历史——每个列表项有独立的 updateDate + updateTime，
+    我们将其作为 snapshot_time。
 
-    Returns flat list of dicts with keys:
+    返回扁平化字典列表，包含以下键：
         match_id, play_type, option_code, option_name,
         sp_value, goal_line, is_single, snapshot_time
     """
@@ -115,13 +115,13 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
     odds = raw.get("value", {}).get("oddsHistory", {})
     match_id = str(match_id)
 
-    # ── single关 map ────────────────────────────────────────────────────────
+    # ── 单关映射 ────────────────────────────────────────────────────────
     single_map = {}
     for s in odds.get("singleList", []):
         pool = s.get("poolCode", "").lower()
         single_map[pool] = s.get("single", 0)
 
-    # ── had (胜平负) ────────────────────────────────────────────────────────
+    # ── had（胜平负）────────────────────────────────────────────────────
     for item in odds.get("hadList", []):
         snapshot_time = _parse_update_time(item)
         goal_line = item.get("goalLine", "")
@@ -139,7 +139,7 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
                     "snapshot_time": snapshot_time,
                 })
 
-    # ── hhad (让球胜平负) ───────────────────────────────────────────────────
+    # ── hhad（让球胜平负）──────────────────────────────────────────────
     for item in odds.get("hhadList", []):
         snapshot_time = _parse_update_time(item)
         goal_line = item.get("goalLine", "")
@@ -157,7 +157,7 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
                     "snapshot_time": snapshot_time,
                 })
 
-    # ── ttg (总进球) ────────────────────────────────────────────────────────
+    # ── ttg（总进球）────────────────────────────────────────────────────
     for item in odds.get("ttgList", []):
         snapshot_time = _parse_update_time(item)
         goal_line = item.get("goalLine", "")
@@ -178,11 +178,11 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
                     "snapshot_time": snapshot_time,
                 })
 
-    # ── crs (比分) ────────────────────────────────────────────────────────
+    # ── crs（比分）────────────────────────────────────────────────────
     for item in odds.get("crsList", []):
         records.extend(parse_crs(item, match_id, single_map))
 
-    # ── hafu (半全场) ─────────────────────────────────────────────────────
+    # ── hafu（半全场）──────────────────────────────────────────────────
     for item in odds.get("hafuList", []):
         records.extend(parse_hafu(item, match_id, single_map))
 
@@ -191,9 +191,9 @@ def parse_fixed_bonus(raw: dict, match_id: str | int) -> list[dict]:
 
 def parse_crs(item: dict, match_id: str, single_map: dict) -> list[dict]:
     """
-    Extract crs (比分) SP records from a single crsList item.
+    从单个 crsList 项中提取 crs（比分）的 SP 记录。
 
-    Returns flat list of dicts with keys:
+    返回扁平化字典列表，包含以下键：
         match_id, play_type, option_code, option_name,
         sp_value, goal_line, is_single, snapshot_time
     """
@@ -241,9 +241,9 @@ def parse_crs(item: dict, match_id: str, single_map: dict) -> list[dict]:
 
 def parse_hafu(item: dict, match_id: str, single_map: dict) -> list[dict]:
     """
-    Extract hafu (半全场) SP records from a single hafuList item.
+    从单个 hafuList 项中提取 hafu（半全场）的 SP 记录。
 
-    Returns flat list of dicts with keys:
+    返回扁平化字典列表，包含以下键：
         match_id, play_type, option_code, option_name,
         sp_value, goal_line, is_single, snapshot_time
     """
@@ -290,10 +290,10 @@ def parse_hafu(item: dict, match_id: str, single_map: dict) -> list[dict]:
 
 def parse_result_list(raw: dict) -> list[dict]:
     """
-    Extract completed match results from getMatchDataPageListV1(method=result).
+    从 getMatchDataPageListV1(method=result) 中提取已完赛的比赛结果。
 
-    sectionsNo999 is the page's full-time score field. Per project rules this
-    is treated as football result over 90 minutes including stoppage time.
+    sectionsNo999 是全场比分字段。根据项目规则，此比分视为包含伤停补时的
+    90 分钟比赛结果。
     """
     results = []
     for day in raw.get("value", {}).get("matchInfoList", []):
@@ -340,7 +340,7 @@ def parse_result_list(raw: dict) -> list[dict]:
 
 
 def _parse_update_time(item: dict) -> str:
-    """Extract updateDate + updateTime as 'YYYY-MM-DD HH:MM:SS'."""
+    """提取 updateDate + updateTime，格式为 'YYYY-MM-DD HH:MM:SS'。"""
     date = item.get("updateDate", "")
     time_ = item.get("updateTime", "")
     if date and time_:
@@ -349,7 +349,7 @@ def _parse_update_time(item: dict) -> str:
 
 
 def _safe_decimal(val) -> float | None:
-    """Convert to float, return None if empty/invalid."""
+    """转换为浮点数，若为空或无效则返回 None。"""
     if val is None or val == "" or val == "0":
         return None
     try:

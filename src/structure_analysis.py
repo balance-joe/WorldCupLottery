@@ -1,4 +1,4 @@
-"""Orchestrate SP trend, market structure, and agent report packages."""
+"""协调SP趋势、市场结构和智能体报告包。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def analyze_match_windows(
     include_debug: bool = False,
     detail_bundle: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
-    """Analyze one match across windows and build an LLM-ready package."""
+    """分析单场比赛跨窗口数据，构建LLM可用的分析包。"""
     match_id = str(match_info.get("match_id", ""))
     trend_details: dict[str, dict[str, PlayTrend]] = {}
     structures: dict[str, MarketStructure] = {}

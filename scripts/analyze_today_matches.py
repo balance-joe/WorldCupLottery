@@ -1,7 +1,7 @@
 """
-Analyze all stored matches with SP history and print a compact screening table.
+分析所有已存储的比赛（含 SP 历史），输出紧凑的筛选表。
 
-Usage:
+用法:
     python -m scripts.analyze_today_matches
 """
 
@@ -30,7 +30,7 @@ def main():
     from src import api_client
     from src import db
     from src.market_structure import PRIORITY_RANK
-    from src.recommendation import build_match_recommendation
+    from src.recommendation import build_match_recommendation, latest_play_snapshot, latest_option_sp
     from src.sp_trend import WINDOWS
     from src.structure_analysis import analyze_match_windows
 
@@ -106,7 +106,7 @@ def main():
                 "main_pick": main_pick or "-",
                 "main_pick_sp": main_pick_sp,
             "score_pick": score_pick or "-",
-                "score_sp": _latest_option_sp(sp_history, "crs", score_pick) if score_pick else None,
+                "score_sp": latest_option_sp(sp_history, "crs", score_pick) if score_pick else None,
                 "goal_range": goal_range or "-",
                 "hafu_pick": hafu_pick or "-",
                 "half_result_pick": half_result_pick or "-",
@@ -151,11 +151,6 @@ def main():
         conn.close()
 
 
-def _main_pick(recommendation) -> str | None:
-    _, pick = _main_result_pick(recommendation)
-    return pick
-
-
 def _main_result_pick(recommendation) -> tuple[str | None, str | None]:
     for suggestion in getattr(recommendation, "suggestions", ()):
         if suggestion.play_type not in {"had", "hhad"} or len(suggestion.selections) != 1:
@@ -196,7 +191,7 @@ def _goal_range(recommendation) -> str | None:
 
 
 def _hafu_pick(sp_history: list[dict]) -> str | None:
-    latest = _latest_play_snapshot(sp_history, "hafu")
+    latest = latest_play_snapshot(sp_history, "hafu")
     if not latest:
         return None
     best = max(
@@ -210,7 +205,7 @@ def _hafu_pick(sp_history: list[dict]) -> str | None:
 
 
 def _half_result_pick(sp_history: list[dict]) -> str | None:
-    latest = _latest_play_snapshot(sp_history, "hafu")
+    latest = latest_play_snapshot(sp_history, "hafu")
     if not latest:
         return None
     buckets = {"H": 0.0, "D": 0.0, "A": 0.0}
@@ -223,26 +218,6 @@ def _half_result_pick(sp_history: list[dict]) -> str | None:
     if not any(buckets.values()):
         return None
     return max(buckets.items(), key=lambda item: item[1])[0]
-
-
-def _latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
-    records = [record for record in sp_history if str(record.get("play_type", "")).lower() == play_type]
-    if not records:
-        return []
-    latest_time = max((str(record.get("snapshot_time", "")) for record in records), default="")
-    return [record for record in records if str(record.get("snapshot_time", "")) == latest_time]
-
-
-def _latest_option_sp(sp_history: list[dict], play_type: str, option_code: str | None) -> float | None:
-    if not option_code:
-        return None
-    for row in _latest_play_snapshot(sp_history, play_type):
-        if str(row.get("option_code")) == option_code:
-            try:
-                return float(row.get("sp_value"))
-            except (TypeError, ValueError):
-                return None
-    return None
 
 
 def _main_pick_sp(recommendation, main_play: str | None, main_pick: str | None) -> float | None:

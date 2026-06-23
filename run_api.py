@@ -1,4 +1,4 @@
-"""FastAPI control panel for the Sporttery football data pipeline."""
+"""竞彩足球数据管道的 FastAPI 控制面板。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -32,7 +34,13 @@ FETCH_COMMAND = [
     "0",
 ]
 
-app = FastAPI(title="Football SP Control API")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    controller.start_fetch()
+    yield
+
+
+app = FastAPI(title="Football SP Control API", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
@@ -67,14 +75,6 @@ class ProcessController:
             threading.Thread(target=self._read_logs, daemon=True).start()
             return self.status()
 
-    def stop_fetch(self) -> dict[str, Any]:
-        with self._lock:
-            if not self._process or self._process.poll() is not None:
-                return self.status()
-            self._process.terminate()
-            self._stopped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            return self.status()
-
     def status(self) -> dict[str, Any]:
         process = self._process
         running = bool(process and process.poll() is None)
@@ -95,8 +95,11 @@ class ProcessController:
         process = self._process
         if not process or process.stdout is None:
             return
-        for line in process.stdout:
-            self._logs.append(line.rstrip("\n"))
+        try:
+            for line in process.stdout:
+                self._logs.append(line.rstrip("\n"))
+        except Exception:
+            pass
         process.wait()
         if self._stopped_at is None:
             self._stopped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -115,45 +118,37 @@ def status() -> dict[str, Any]:
     return controller.status()
 
 
-@app.post("/api/fetch/start")
-def start_fetch() -> dict[str, Any]:
-    return controller.start_fetch()
-
-
-@app.post("/api/fetch/stop")
-def stop_fetch() -> dict[str, Any]:
-    return controller.stop_fetch()
-
-
 @app.get("/api/fetch/logs")
 def fetch_logs() -> dict[str, Any]:
     return controller.logs()
 
 
+_ALLOWED_TABLES = frozenset({
+    "sporttery_match",
+    "sporttery_sp_snapshot",
+    "sporttery_raw_snapshot",
+    "sporttery_api_error",
+    "daily_recommendation",
+    "betting_ticket",
+    "betting_ticket_selection",
+})
+
+
 @app.get("/api/db/summary")
 def db_summary() -> dict[str, Any]:
-    tables = [
-        "sporttery_match",
-        "sporttery_sp_snapshot",
-        "sporttery_raw_snapshot",
-        "sporttery_api_error",
-        "daily_recommendation",
-        "betting_ticket",
-        "betting_ticket_selection",
-    ]
     try:
         conn = db.get_connection()
         db.ensure_tables(conn)
-        counts = {
-            table: conn.execute(f"SELECT COUNT(1) FROM {table}").fetchone()[0]
-            for table in tables
-        }
+        counts = {}
+        for table in _ALLOWED_TABLES:
+            # 表名来自硬编码白名单，可防止注入攻击。
+            counts[table] = conn.execute(f"SELECT COUNT(1) FROM {table}").fetchone()[0]
         latest_sp = conn.execute(
             "SELECT MAX(snapshot_time) FROM sporttery_sp_snapshot"
         ).fetchone()[0]
         conn.close()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception:
+        raise HTTPException(status_code=500, detail="Database query failed") from None
     return {
         "backend": db._db_backend(),
         "counts": counts,
@@ -164,4 +159,4 @@ def db_summary() -> dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("run_api:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("run_api:app", host="127.0.0.1", port=9508, reload=False)

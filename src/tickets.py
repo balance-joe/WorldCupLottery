@@ -1,7 +1,6 @@
-"""Ticket legality rules for Sporttery HAD (胜平负) tickets.
+"""竞彩胜平负（HAD）票单合法性校验规则。
 
-This module does not place bets. It only validates whether a manually built
-ticket is legal under the project's Sporttery rules.
+本模块不负责下注，仅校验手动构建的票单是否符合项目竞彩规则。
 """
 
 from __future__ import annotations
@@ -22,15 +21,15 @@ PASS_TYPE_RE = re.compile(r"^(\d+)x1$")
 
 
 class TicketValidationError(ValueError):
-    """Raised when a ticket violates Sporttery ticket construction rules."""
+    """票单违反竞彩票单构建规则时抛出。"""
 
 
 @dataclass(frozen=True)
 class HadSelection:
-    """One match's HAD selections.
+    """单场比赛的胜平负选项。
 
-    option_codes can contain one or more of H/D/A for a multiple-choice match.
-    is_single comes from the Sporttery fixed bonus API's singleList flag.
+    option_codes 可包含一个或多个 H/D/A，用于多选比赛。
+    is_single 来源于竞彩固定奖金 API 的 singleList 标志。
     """
 
     match_id: str
@@ -42,7 +41,7 @@ class HadSelection:
 
 @dataclass(frozen=True)
 class Ticket:
-    """A manually constructed HAD ticket."""
+    """手动构建的胜平负票单。"""
 
     selections: tuple[HadSelection, ...]
     pass_type: str
@@ -51,18 +50,18 @@ class Ticket:
 
     @property
     def unit_count(self) -> int:
-        """Number of basic betting units before multiplier."""
+        """乘以倍数前的基本投注单位数。"""
         return reduce(mul, (len(s.option_codes) for s in self.selections), 1)
 
     @property
     def amount(self) -> int:
-        """Ticket amount in RMB."""
+        """票单金额（人民币）。"""
         return self.unit_count * self.stake_per_unit * self.multiplier
 
 
 @dataclass(frozen=True)
 class TicketCombinationQuote:
-    """One possible winning combination priced with current SP."""
+    """基于当前 SP 定价的一个可能中奖组合。"""
 
     options: tuple[tuple[str, str], ...]
     combined_sp: float
@@ -71,7 +70,7 @@ class TicketCombinationQuote:
 
 @dataclass(frozen=True)
 class TicketQuote:
-    """Ticket price and potential payout based on refreshed latest SP."""
+    """基于最新刷新 SP 的票单价格与潜在赔付。"""
 
     ticket: Ticket
     snapshot_times: tuple[str, ...]
@@ -82,16 +81,15 @@ class TicketQuote:
 
 
 def validate_ticket(ticket: Ticket) -> Ticket:
-    """Validate a HAD ticket and return it when legal.
+    """校验胜平负票单，合法时返回该票单。
 
-    Rules enforced:
-    - Only 胜平负 (had) is allowed.
-    - Options must be H/D/A.
-    - A match can appear only once in a ticket.
-    - Single tickets must contain exactly one match and require is_single=True.
-    - Parlay tickets must be Nx1, contain at least two matches, and N must match
-      the number of matches.
-    - Every selected match must be in sale status (match_status == "1").
+    执行规则：
+    - 仅允许胜平负（had）玩法。
+    - 选项必须为 H/D/A。
+    - 同一比赛在票单中只能出现一次。
+    - 单关票单必须恰好包含一场比赛，且 is_single 必须为 True。
+    - 串关票单必须为 Nx1 格式，至少包含两场比赛，且 N 须与比赛场数一致。
+    - 每场选中的比赛必须处于在售状态（match_status == "1"）。
     """
     if ticket.stake_per_unit <= 0:
         raise TicketValidationError("stake_per_unit must be positive")
@@ -117,7 +115,7 @@ def make_had_selection(
     is_single: bool = False,
     match_status: str = "1",
 ) -> HadSelection:
-    """Build a normalized HAD selection from user or model output."""
+    """根据用户或模型输出构建标准化的胜平负选项。"""
     normalized = tuple(dict.fromkeys(code.upper() for code in option_codes))
     return HadSelection(
         match_id=str(match_id),
@@ -134,7 +132,7 @@ def make_had_selection_from_sp_records(
     *,
     match_status: str = "1",
 ) -> HadSelection:
-    """Build a HAD selection using fetched SP rows to infer single support."""
+    """使用已获取的 SP 记录构建胜平负选项，并推断单关支持状态。"""
     selection = make_had_selection(
         match_id,
         option_codes,
@@ -171,7 +169,7 @@ def build_ticket(
     stake_per_unit: int = 2,
     multiplier: int = 1,
 ) -> Ticket:
-    """Create and validate a HAD ticket."""
+    """创建并校验胜平负票单。"""
     ticket = Ticket(
         selections=tuple(selections),
         pass_type=pass_type,
@@ -182,10 +180,10 @@ def build_ticket(
 
 
 def quote_ticket_with_latest_sp(ticket: Ticket, sp_records: list[dict]) -> TicketQuote:
-    """Recalculate ticket price and payout range with the latest HAD SP rows.
+    """使用最新的胜平负 SP 记录重新计算票单价格和赔付区间。
 
-    Call this immediately before manual purchase. It does not freeze or place a
-    ticket; final prize value is still the SP at successful Sporttery issuance.
+    请在手动购彩前立即调用。本函数不会冻结或下单票单；
+    最终奖金仍以竞彩成功出票时的 SP 为准。
     """
     validate_ticket(ticket)
     current_records = latest_records(sp_records)

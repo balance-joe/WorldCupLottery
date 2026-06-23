@@ -1,7 +1,7 @@
 """
 预测 vs SP 对比分析 + 预测准确率回测 + 价值场次发现。
 
-Usage:
+用法:
     python -m scripts.analyze_predictions
     python -m scripts.analyze_predictions --detail
 """
@@ -22,11 +22,11 @@ from src import db
 
 
 def clean_team_name(name: str) -> str:
-    """Strip emoji flags and special Unicode, keep Chinese name."""
-    # Chain regex ops — combining ranges in one character class causes issues
-    name = re.sub(r'[\U0001F1E0-\U0001F1FF]', '', name)  # Regional indicators
-    name = re.sub(r'[\U0000FE00-\U0000FE0F]', '', name)   # Variation selectors
-    name = re.sub(r'\U0000200D', '', name)                  # ZWJ
+    """去除 emoji 国旗和特殊 Unicode 字符，保留中文队名。"""
+    # 链式正则操作——将多个范围合并到一个字符类中会导致问题
+    name = re.sub(r'[\U0001F1E0-\U0001F1FF]', '', name)  # 区域指示符
+    name = re.sub(r'[\U0000FE00-\U0000FE0F]', '', name)   # 变体选择符
+    name = re.sub(r'\U0000200D', '', name)                  # 零宽连接符
     return name.strip()
 
 
@@ -59,7 +59,7 @@ def load_sporttery_matches(conn) -> list[dict]:
 
 
 def _date_range(date_str: str, delta_days: int = 1) -> list[str]:
-    """Return date_str +/- delta_days."""
+    """返回 date_str 前后 delta_days 天的日期列表。"""
     from datetime import datetime, timedelta
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -69,10 +69,10 @@ def _date_range(date_str: str, delta_days: int = 1) -> list[str]:
 
 
 def join_datasets(preds: list[dict], sporttery: list[dict]) -> list[dict]:
-    """Join predictions with sporttery data by team name + date (±1 day)."""
+    """按队名 + 日期（正负1天）将预测数据与体彩数据进行关联。"""
     from collections import defaultdict
 
-    # Build sporttery index: (clean_home, clean_away) -> [matches]
+    # 构建体彩索引: (clean_home, clean_away) -> [matches]
     st_by_teams = defaultdict(list)
     for m in sporttery:
         if not m.get("match_time"):
@@ -90,14 +90,14 @@ def join_datasets(preds: list[dict], sporttery: list[dict]) -> list[dict]:
 
         m = None
 
-        # Exact team match
+        # 精确匹配队伍
         candidates = st_by_teams.get((h, a), [])
         if not candidates:
-            # Try reversed (some sites list away first)
+            # 尝试反转主客队（部分网站客队在前）
             candidates = st_by_teams.get((a, h), [])
 
         if candidates:
-            # Prefer same date, then ±1 day
+            # 优先同日期，然后正负1天
             date_candidates = _date_range(pred_date)
             for dc in date_candidates:
                 for c in candidates:
@@ -106,7 +106,7 @@ def join_datasets(preds: list[dict], sporttery: list[dict]) -> list[dict]:
                         break
                 if m:
                     break
-            # Fallback: just take the first candidate
+            # 兜底: 直接取第一个候选
             if not m and candidates:
                 m = candidates[0]
 
@@ -137,7 +137,7 @@ def calc_sp_implied_prob(conn, match_id: str) -> dict | None:
 
     probs = {}
     for r in rows:
-        probs[r[0]] = r[2]  # implied_prob_norm
+        probs[r[0]] = r[2]  # 隐含概率归一化值
 
     return {
         "sp_home_prob": probs.get("H", 0),
@@ -147,7 +147,7 @@ def calc_sp_implied_prob(conn, match_id: str) -> dict | None:
 
 
 def analyze(conn, *, detail: bool = False) -> dict:
-    """Run full analysis."""
+    """执行完整分析。"""
     preds = load_predictions(conn)
     sporttery = load_sporttery_matches(conn)
     joined = join_datasets(preds, sporttery)
@@ -161,7 +161,7 @@ def analyze(conn, *, detail: bool = False) -> dict:
         print(f"数据匹配: {len(matched)}/{len(preds)} 场预测匹配到体彩数据")
         print(f"{'=' * 60}")
 
-    # Deduplicate: one pred_match_id -> one sporttery match
+    # 去重: 一个 pred_match_id 对应一场体彩比赛
     seen_pred_ids = set()
     deduped_matched = []
     for j in matched:
@@ -178,7 +178,7 @@ def analyze(conn, *, detail: bool = False) -> dict:
         if not m.get("result_90"):
             continue
 
-        # 预测方向 (home_prob is already 0-1 in DB)
+        # 预测方向（home_prob 在数据库中已是 0-1 范围）
         hp = p["home_prob"] if p["home_prob"] and p["home_prob"] <= 1 else p["home_prob"] / 100
         dp = p["draw_prob"] if p["draw_prob"] and p["draw_prob"] <= 1 else p["draw_prob"] / 100
         ap = p["away_prob"] if p["away_prob"] and p["away_prob"] <= 1 else p["away_prob"] / 100

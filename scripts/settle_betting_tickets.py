@@ -1,4 +1,4 @@
-"""Settle recorded betting tickets after Sporttery results are backfilled."""
+"""在竞彩赛果回填后，结算已记录的投注单。"""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ if str(_ROOT) not in sys.path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Settle pending betting tickets")
-    parser.add_argument("--bet-group", help="Only settle one bet_group")
+    parser = argparse.ArgumentParser(description="结算待处理的投注单")
+    parser.add_argument("--bet-group", help="仅结算指定的 bet_group")
     args = parser.parse_args()
 
     from src import db

@@ -1,7 +1,7 @@
 """
 逐票信号分析：回溯每张票下单时的 SP 信号和市场结构。
 
-Usage:
+用法:
     python -m scripts.analyze_tickets
     python -m scripts.analyze_tickets --detail
 """

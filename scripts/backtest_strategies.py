@@ -1,7 +1,7 @@
 """
 策略回测：在全部有 SP+赛果的比赛上模拟不同买入策略。
 
-Usage:
+用法:
     python -m scripts.backtest_strategies
     python -m scripts.backtest_strategies --detail
 """

@@ -1,11 +1,11 @@
 """
-Generate structured LLM analysis packages from raw match data.
+从原始比赛数据生成结构化LLM分析包。
 
-Output format designed for LLM consumption:
-- Separates facts from interpretation
-- Enforces hard stops on suspended matches
-- Provides movement profiles (not just raw change)
-- Adds time context for proper weighting
+输出格式专为LLM消费设计：
+- 将事实与解释分离
+- 对停售比赛强制硬性停止
+- 提供变动画像（而不仅是原始变化值）
+- 添加时间上下文以进行合理加权
 """
 
 from __future__ import annotations
@@ -21,10 +21,9 @@ def build_market_structure_llm_package(
     debug: bool = False,
 ) -> dict:
     """
-    Build the new LLM input package centered on market_structure.
+    构建以市场结构为中心的新LLM输入包。
 
-    LLMs should consume this structure instead of inferring trends directly from
-    raw SP rows.
+    LLM应使用此结构，而不是直接从原始SP行推断趋势。
     """
     result = analyze_match_windows(
         match_info,
@@ -40,29 +39,29 @@ def build_llm_package(
     sp_history: list[dict],
     match_detail: dict | None = None,
 ) -> dict:
-    """Compatibility wrapper for the new market-structure-centered package."""
+    """新市场结构中心包的兼容性包装器。"""
     del match_detail
     return build_market_structure_llm_package(match_info, sp_history)
 
 
-# ── Legacy signal classifier (kept for test coverage) ──────────────────────
-# Production signal logic lives in structure_analysis.py + agent_report_schema.py.
-# This function is retained because test_llm_signals_crs_hafu.py exercises
-# CRS/HAFU signal classification through it.
+# ── 旧版信号分类器（保留用于测试覆盖）─────────────────────────────────────
+# 生产环境信号逻辑位于 structure_analysis.py + agent_report_schema.py。
+# 此函数保留是因为 test_llm_signals_crs_hafu.py 通过它测试
+# CRS/HAFU 信号分类功能。
 
 
-def _classify_signals(markets, movement, team_form, historical, status_control) -> dict:
-    """Classify data into positive, negative, structure, and uncertainty signals."""
+def _classify_signals(markets, movement, team_form, historical, status_control) -> dict:  # pragma: deprecated
+    """将数据分类为正面、负面、结构性和不确定性信号。"""
     positive = []
     negative = []
     structure = []
     uncertainty = []
 
-    # ── Status ───────────────────────────────────────────────────────────
+    # ── 状态 ───────────────────────────────────────────────────────────────
     if not status_control.get("tradable"):
         uncertainty.append(f"比赛当前{status_control.get('match_status_name', '未知状态')}，不能形成投注动作")
 
-    # ── Had movement ─────────────────────────────────────────────────────
+    # ── 胜平负变动 ─────────────────────────────────────────────────────────
     had = markets.get("had", {})
     if had:
         opts = {o["code"]: o for o in had.get("options", [])}
@@ -72,22 +71,22 @@ def _classify_signals(markets, movement, team_form, historical, status_control) 
         if h.get("prob_change") and h["prob_change"] > 0.02:
             positive.append(f"主胜归一化概率提升{h['prob_change']:.1%}")
 
-    # ── Hhad movement ────────────────────────────────────────────────────
+    # ── 让球胜平负变动 ─────────────────────────────────────────────────────
     hhad = markets.get("hhad", {})
     if hhad:
         opts = {o["code"]: o for o in hhad.get("options", [])}
         h = opts.get("H", {})
         if h.get("sp_change") and h["sp_change"] < 0:
             positive.append(f"让球让胜SP下降{abs(h['sp_change']):.2f}，赢球幅度预期增强")
-        # Check if hhad and had agree
+        # 检查让球与胜平负是否一致
         had_h = {o["code"]: o for o in had.get("options", [])}.get("H", {})
         if h.get("sp_change", 0) < 0 and had_h.get("sp_change", 0) < 0:
             positive.append("胜平负与让球胜平负方向一致")
-        # Check if hhad prob is not very high
+        # 检查让胜概率是否不高
         if h.get("current_prob") and h["current_prob"] < 0.45:
             negative.append(f"让胜归一化概率仅{h['current_prob']:.1%}，未达到强确定性水平")
 
-    # ── Ttg ──────────────────────────────────────────────────────────────
+    # ── 总进球 ─────────────────────────────────────────────────────────────
     ttg = markets.get("ttg", {})
     if ttg:
         low = ttg.get("low_price_options", [])
@@ -97,7 +96,7 @@ def _classify_signals(markets, movement, team_form, historical, status_control) 
             if total_prob > 0.4:
                 structure.append(f"总进球低赔集中在{'/'.join(low)}球({total_prob:.1%})，偏向中低比分结构")
 
-    # ── Crs (比分) ──────────────────────────────────────────────────────
+    # ── 比分 ───────────────────────────────────────────────────────────────
     crs = markets.get("crs", {})
     if crs:
         opts = crs.get("options", [])
@@ -141,7 +140,7 @@ def _classify_signals(markets, movement, team_form, historical, status_control) 
             for code, name, change, pct in sp_changes[:2]:
                 positive.append(f"比分 {name} SP 下降{pct:.1%}，市场预期增强")
 
-    # ── Hafu (半全场) ───────────────────────────────────────────────────
+    # ── 半全场 ─────────────────────────────────────────────────────────────
     hafu = markets.get("hafu", {})
     if hafu:
         opts = {o["code"]: o for o in hafu.get("options", [])}
@@ -171,27 +170,39 @@ def _classify_signals(markets, movement, team_form, historical, status_control) 
         if hh_prob > 0.25 and had_h.get("sp_change", 0) < 0:
             positive.append("半全场与胜平负方向一致，主队优势明显")
 
-    # ── Team form ────────────────────────────────────────────────────────
+    # ── 球队状态 ───────────────────────────────────────────────────────────
     home_form = team_form.get("home", {})
     away_form = team_form.get("away", {})
-    if home_form.get("win_pct") and int(home_form["win_pct"].replace("%", "")) >= 60:
-        positive.append(f"主队近5场胜率{home_form['win_pct']}")
-    if away_form.get("loss_pct") and int(away_form["loss_pct"].replace("%", "")) >= 40:
-        positive.append(f"客队近5场败率{away_form['loss_pct']}")
+    try:
+        if home_form.get("win_pct") and int(str(home_form["win_pct"]).replace("%", "")) >= 60:
+            positive.append(f"主队近5场胜率{home_form['win_pct']}")
+    except (ValueError, TypeError):
+        pass
+    try:
+        if away_form.get("loss_pct") and int(str(away_form["loss_pct"]).replace("%", "")) >= 40:
+            positive.append(f"客队近5场败率{away_form['loss_pct']}")
+    except (ValueError, TypeError):
+        pass
 
     feature = team_form.get("feature", {})
-    if feature.get("home_loss_avg") and float(feature["home_loss_avg"]) < 0.5:
-        positive.append(f"主队近10场场均失球{feature['home_loss_avg']}，防守突出")
-    if feature.get("away_loss_avg") and float(feature["away_loss_avg"]) > 1.0:
-        positive.append(f"客队近10场场均失球{feature['away_loss_avg']}，防守薄弱")
+    try:
+        if feature.get("home_loss_avg") and float(feature["home_loss_avg"]) < 0.5:
+            positive.append(f"主队近10场场均失球{feature['home_loss_avg']}，防守突出")
+    except (ValueError, TypeError):
+        pass
+    try:
+        if feature.get("away_loss_avg") and float(feature["away_loss_avg"]) > 1.0:
+            positive.append(f"客队近10场场均失球{feature['away_loss_avg']}，防守薄弱")
+    except (ValueError, TypeError):
+        pass
 
-    # ── Historical ───────────────────────────────────────────────────────
+    # ── 历史交锋 ───────────────────────────────────────────────────────────
     if historical.get("h2h_count", 0) <= 1:
         uncertainty.append(f"历史交锋仅{historical.get('h2h_count', 0)}场，参考价值低")
     if historical.get("same_odds_count", 0) == 0:
         uncertainty.append("同奖历史样本为0，无法用同奖回查验证")
 
-    # ── Movement volatility ──────────────────────────────────────────────
+    # ── 变动波动性 ─────────────────────────────────────────────────────────
     for key, prof in movement.items():
         if prof.get("volatility") == "high":
             uncertainty.append(f"{key} SP波动较大({prof.get('pattern', '')})，需关注是否为临场异动")

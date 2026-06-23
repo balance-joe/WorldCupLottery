@@ -1,7 +1,7 @@
 """
 竞彩足球定时同步脚本 — 赛果回填 + 赔率更新
 
-Usage:
+用法:
     python -m scripts.sync                    # 单次执行
     python -m scripts.sync --interval 300     # 每 5 分钟循环
 """
@@ -24,21 +24,35 @@ from src import api_client, parsers, probability, db
 # ── 赛果回填 ─────────────────────────────────────────────────────────────────
 
 def sync_results(conn) -> int:
-    """拉取已结束比赛，更新比分和赛果。返回更新数量。"""
-    raw, err = api_client.fetch_result_list(page_size=50)
-    if err:
-        print(f"  ✗ 赛果拉取失败: {err}")
-        return 0
+    """拉取已结束比赛，更新比分和赛果。自动翻页直到所有结果拉取完毕。返回更新数量。"""
+    all_results: list[dict] = []
+    page_no = 1
+    page_size = 50
 
-    db.save_raw_snapshot(conn, "matchResults", "method=result", raw)
+    while True:
+        raw, err = api_client.fetch_result_list(page_size=page_size, page_no=page_no)
+        if err:
+            print(f"  ✗ 赛果拉取失败 (page {page_no}): {err}")
+            break
 
-    results = parsers.parse_result_list(raw)
-    if not results:
+        if page_no == 1:
+            db.save_raw_snapshot(conn, "matchResults", "method=result", raw)
+
+        results = parsers.parse_result_list(raw)
+        if not results:
+            break
+
+        all_results.extend(results)
+        if len(results) < page_size:
+            break
+        page_no += 1
+
+    if not all_results:
         print("  无已结束比赛")
         return 0
 
-    updated = db.save_match_results(conn, results)
-    print(f"  赛果更新: {updated} 场")
+    updated = db.save_match_results(conn, all_results)
+    print(f"  赛果更新: {updated} 场 (共 {page_no} 页)")
     return updated
 
 

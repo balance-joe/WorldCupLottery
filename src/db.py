@@ -1,7 +1,6 @@
-"""Database operations for Sporttery data.
+"""竞彩数据的数据库操作。
 
-MySQL is the runtime backend. SQLite support is retained only for isolated unit
-tests and legacy migration utilities.
+MySQL是运行时后端。SQLite支持仅保留用于独立的单元测试和旧版迁移工具。
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from src.sp_movement import latest_records
 
 _SQLITE_PATH = Path(__file__).resolve().parent.parent / "data" / "sporttery.db"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,12 +33,9 @@ def _db_backend() -> str:
     return os.environ.get("SPORTTERY_DB_BACKEND", "mysql").strip().lower() or "mysql"
 
 
-def _now_sql() -> str:
-    return "datetime('now','localtime')"
-
 
 def _load_env_file() -> None:
-    """Load simple KEY=VALUE pairs from project .env without overriding env vars."""
+    """从项目.env文件加载简单的KEY=VALUE键值对，不覆盖已有的环境变量。"""
     global _ENV_LOADED
     if _ENV_LOADED:
         return
@@ -59,7 +54,7 @@ def _load_env_file() -> None:
             os.environ[key] = value
 
 
-# DDL
+# 数据定义语句
 
 DDL_RAW_SNAPSHOT = """
 CREATE TABLE IF NOT EXISTS sporttery_raw_snapshot (
@@ -498,10 +493,10 @@ SQLITE_DDLS = (
 )
 
 
-# Connection
+# 数据库连接
 
 class Row(dict):
-    """Dict row that also supports positional indexing like sqlite3.Row."""
+    """字典行，同时支持像sqlite3.Row那样的位置索引。"""
 
     def __init__(self, values: Iterable, columns: list[str]):
         super().__init__(zip(columns, values))
@@ -514,7 +509,7 @@ class Row(dict):
 
 
 class CursorAdapter:
-    """Normalize sqlite3 and PyMySQL cursors for the existing project code."""
+    """将sqlite3和PyMySQL游标规范化，以适配现有项目代码。"""
 
     def __init__(self, cursor):
         self._cursor = cursor
@@ -552,7 +547,7 @@ class CursorAdapter:
 
 
 class Connection:
-    """Small database connection wrapper used by the project."""
+    """项目使用的小型数据库连接封装器。"""
 
     def __init__(self):
         self.backend = _db_backend()
@@ -613,17 +608,17 @@ class Connection:
 
 
 def _mysqlize_sql(sql: str) -> str:
-    """Translate the project's SQLite-style placeholders for PyMySQL."""
+    """将项目的SQLite风格占位符转换为PyMySQL兼容格式。"""
     return sql.replace("?", "%s")
 
 
 def get_connection() -> Connection:
-    """Return a new configured database connection."""
+    """返回一个新的已配置数据库连接。"""
     return Connection()
 
 
 def ensure_tables(conn: Connection | None = None) -> None:
-    """Create tables if they don't exist."""
+    """如果表不存在则创建。"""
     close = False
     if conn is None:
         conn = get_connection()
@@ -645,7 +640,7 @@ def ensure_tables(conn: Connection | None = None) -> None:
             conn.close()
 
 
-# Raw snapshot
+# 原始快照
 
 def save_raw_snapshot(
     conn: Connection,
@@ -655,16 +650,16 @@ def save_raw_snapshot(
     match_id: str | None = None,
     request_params: dict | None = None,
 ) -> bool:
-    """Save raw API response. Returns True if inserted, False if duplicate.
+    """保存原始API响应。插入成功返回True，重复返回False。
 
-    Also tracks *response_version*: increments per (source_name, match_id)
-    so you can see how many distinct snapshots have been captured.
+    同时跟踪 *response_version*：按(source_name, match_id)递增，
+    以便查看已捕获了多少不同的快照。
     """
     raw_str = json.dumps(raw_json, ensure_ascii=False, separators=(",", ":"))
     content_hash = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Check for duplicate content hash first
+    # 首先检查重复的内容哈希
     existing = conn.execute(
         "SELECT id FROM sporttery_raw_snapshot WHERE content_hash = ?",
         (content_hash,),
@@ -672,7 +667,7 @@ def save_raw_snapshot(
     if existing:
         return False
 
-    # Compute next version for this (source_name, match_id)
+    # 计算此(source_name, match_id)的下一个版本号
     row = conn.execute(
         """
         SELECT COALESCE(MAX(response_version), 0) FROM sporttery_raw_snapshot
@@ -709,7 +704,7 @@ def save_api_error(
     http_status: int | None = None,
     retry_count: int = 0,
 ) -> None:
-    """Persist an API error for later analysis."""
+    """保存API错误以供后续分析。"""
     conn.execute(
         """
         INSERT INTO sporttery_api_error
@@ -726,10 +721,10 @@ def save_api_error(
     conn.commit()
 
 
-# Match
+# 比赛
 
 def save_match(conn: Connection, match: dict) -> None:
-    """UPSERT a match record (does NOT commit — caller is responsible)."""
+    """UPSERT一条比赛记录（不提交事务——调用方负责提交）。"""
     m = dict(match)
     if m.get("match_time") and hasattr(m["match_time"], "strftime"):
         m["match_time"] = m["match_time"].strftime("%Y-%m-%d %H:%M:%S")
@@ -777,7 +772,7 @@ def save_match(conn: Connection, match: dict) -> None:
 
 
 def save_matches(conn: Connection, matches: list[dict]) -> int:
-    """UPSERT multiple match records with a single commit. Returns count."""
+    """UPSERT多条比赛记录并统一提交。返回记录数。"""
     for m in matches:
         save_match(conn, m)
     conn.commit()
@@ -785,7 +780,7 @@ def save_matches(conn: Connection, matches: list[dict]) -> int:
 
 
 def save_match_result(conn: Connection, result: dict) -> None:
-    """UPSERT one match result (does NOT commit — caller is responsible)."""
+    """UPSERT一条比赛结果（不提交事务——调用方负责提交）。"""
     r = dict(result)
     if r.get("match_time") and hasattr(r["match_time"], "strftime"):
         r["match_time"] = r["match_time"].strftime("%Y-%m-%d %H:%M:%S")
@@ -866,21 +861,20 @@ def save_match_result(conn: Connection, result: dict) -> None:
 
 
 def save_match_results(conn: Connection, results: list[dict]) -> int:
-    """UPSERT multiple match results with a single commit. Returns count."""
+    """UPSERT多条比赛结果并统一提交。返回记录数。"""
     for result in results:
         save_match_result(conn, result)
     conn.commit()
     return len(results)
 
 
-# SP snapshot
+# SP快照
 
 def save_sp_snapshots(conn: Connection, records: list[dict]) -> int:
-    """Bulk insert SP snapshot records with content-hash dedup.
+    """批量插入SP快照记录，使用内容哈希去重。
 
-    If a record's (match_id, play_type, option_code, sp_value, goal_line,
-    is_single) combination already exists for the same snapshot_time, the
-    row is skipped instead of replaced.
+    如果某条记录的(match_id, play_type, option_code, sp_value, goal_line,
+    is_single)组合在同一snapshot_time下已存在，则跳过该行而非替换。
     """
     if not records:
         return 0
@@ -893,7 +887,7 @@ def save_sp_snapshots(conn: Connection, records: list[dict]) -> int:
         st = r.get("snapshot_time", now)
         h = _sp_content_hash(r["match_id"], r["play_type"], r["option_code"],
                              r["sp_value"], r.get("goal_line"), r.get("is_single", 0))
-        # Skip if same content already stored for this snapshot_time
+        # 如果此snapshot_time已存储相同内容则跳过
         existing = conn.execute(
             "SELECT id FROM sporttery_sp_snapshot WHERE match_id=? AND snapshot_time=? "
             "AND play_type=? AND option_code=? AND content_hash=?",
@@ -912,27 +906,18 @@ def save_sp_snapshots(conn: Connection, records: list[dict]) -> int:
         if conn.backend == "mysql":
             conn.execute(
                 """
-                INSERT INTO sporttery_sp_snapshot
+                INSERT IGNORE INTO sporttery_sp_snapshot
                     (match_id, snapshot_time, play_type, option_code, option_name,
                      sp_value, goal_line, is_single,
                      implied_prob_raw, implied_prob_norm, prob_sum, content_hash)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    option_name=VALUES(option_name),
-                    sp_value=VALUES(sp_value),
-                    goal_line=VALUES(goal_line),
-                    is_single=VALUES(is_single),
-                    implied_prob_raw=VALUES(implied_prob_raw),
-                    implied_prob_norm=VALUES(implied_prob_norm),
-                    prob_sum=VALUES(prob_sum),
-                    content_hash=VALUES(content_hash)
                 """,
                 params,
             )
         else:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO sporttery_sp_snapshot
+                INSERT OR IGNORE INTO sporttery_sp_snapshot
                     (match_id, snapshot_time, play_type, option_code, option_name,
                      sp_value, goal_line, is_single,
                      implied_prob_raw, implied_prob_norm, prob_sum, content_hash)
@@ -952,7 +937,7 @@ def _sp_content_hash(
     goal_line: str | None,
     is_single: int,
 ) -> str:
-    """Deterministic hash of SP-critical fields."""
+    """SP关键字段的确定性哈希。"""
     raw = f"{match_id}|{play_type}|{option_code}|{sp_value}|{goal_line}|{is_single}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -963,7 +948,7 @@ def fetch_sp_history(
     *,
     play_type: str = "had",
 ) -> list[dict]:
-    """Fetch SP history rows for matches and one play type."""
+    """获取指定比赛和玩法类型的SP历史记录。"""
     if not match_ids:
         return []
 
@@ -986,7 +971,7 @@ def fetch_all_sp_history(
     conn: Connection,
     match_ids: list[str] | tuple[str, ...],
 ) -> list[dict]:
-    """Fetch SP history rows for all supported play types at once."""
+    """一次性获取所有支持玩法类型的SP历史记录。"""
     if not match_ids:
         return []
 
@@ -1004,18 +989,8 @@ def fetch_all_sp_history(
     return _fetch_dicts(cur)
 
 
-def fetch_latest_sp_snapshots(
-    conn: Connection,
-    match_ids: list[str] | tuple[str, ...],
-    *,
-    play_type: str = "had",
-) -> list[dict]:
-    """Fetch latest SP row per match/play/option from stored history."""
-    return latest_records(fetch_sp_history(conn, match_ids, play_type=play_type))
-
-
 def fetch_match(conn: Connection, match_id: str) -> dict | None:
-    """Fetch one match by match_id."""
+    """根据match_id获取一条比赛记录。"""
     cur = conn.execute("SELECT * FROM sporttery_match WHERE match_id = ?", (str(match_id),))
     row = cur.fetchone()
     if not row:
@@ -1025,7 +1000,7 @@ def fetch_match(conn: Connection, match_id: str) -> dict | None:
 
 
 def fetch_matches_for_analysis(conn: Connection, match_date: str | None = None) -> list[dict]:
-    """Fetch matches that have SP history, optionally filtered by local match date."""
+    """获取有SP历史的比赛，可选按本地比赛日期过滤。"""
     sql = """
         SELECT DISTINCT m.*
         FROM sporttery_match m
@@ -1041,7 +1016,7 @@ def fetch_matches_for_analysis(conn: Connection, match_date: str | None = None) 
 
 
 def save_market_analysis(conn: Connection, analysis: dict) -> None:
-    """Save one market structure analysis snapshot."""
+    """保存一条市场结构分析快照。"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     params = (
         str(analysis["match_id"]),
@@ -1097,7 +1072,7 @@ def save_market_analysis(conn: Connection, analysis: dict) -> None:
 
 
 def save_daily_recommendations(conn: Connection, recommendations: list[dict]) -> int:
-    """Persist fixed pre-match recommendation records for later audit/backtest."""
+    """保存赛前固定推荐记录，供后续审计/回测使用。"""
     if not recommendations:
         return 0
     inserted = 0
@@ -1178,10 +1153,10 @@ def save_daily_recommendations(conn: Connection, recommendations: list[dict]) ->
 
 
 def save_betting_ticket(conn: Connection, ticket: dict) -> int:
-    """Save one manual betting ticket and its selections.
+    """保存一张手动投注票及其选项。
 
-    This is a financial ledger for manual decisions, not a Sporttery raw-data
-    table. Keep original SP snapshots in sporttery_sp_snapshot.
+    这是手动决策的财务账本，不是竞彩原始数据表。
+    原始SP快照保存在sporttery_sp_snapshot中。
     """
     selections = ticket.get("selections") or []
     if not selections:
@@ -1250,7 +1225,7 @@ def save_betting_ticket(conn: Connection, ticket: dict) -> int:
 
 
 def find_sp_snapshot_id(conn: Connection, selection: dict) -> int | None:
-    """Find the stored SP snapshot row matching a betting selection."""
+    """查找与投注选项匹配的已存储SP快照行。"""
     params = [
         str(selection["match_id"]),
         selection["play_type"],
@@ -1275,7 +1250,7 @@ def find_sp_snapshot_id(conn: Connection, selection: dict) -> int | None:
 
 
 def fetch_betting_tickets(conn: Connection, bet_group: str | None = None) -> list[dict]:
-    """Fetch saved manual betting tickets, optionally for one group."""
+    """获取已保存的手动投注票，可选按组过滤。"""
     sql = "SELECT * FROM betting_ticket"
     params: tuple[str, ...] = ()
     if bet_group is not None:
@@ -1313,7 +1288,7 @@ def _ensure_match_result_columns(conn: Connection) -> None:
 
 
 def _ensure_raw_snapshot_version_column(conn: Connection) -> None:
-    """Add response_version column to sporttery_raw_snapshot if missing."""
+    """如果缺少response_version列则添加到sporttery_raw_snapshot表。"""
     existing = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(sporttery_raw_snapshot)").fetchall()
@@ -1360,7 +1335,7 @@ _sp_hash_column_checked = False
 
 
 def _ensure_sp_snapshot_hash_column(conn: Connection) -> None:
-    """Add content_hash column to sporttery_sp_snapshot if missing (once)."""
+    """如果缺少content_hash列则添加到sporttery_sp_snapshot表（仅检查一次）。"""
     global _sp_hash_column_checked
     if conn.backend == "mysql":
         return

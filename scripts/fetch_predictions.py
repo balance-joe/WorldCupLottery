@@ -1,7 +1,7 @@
 """
 抓取预测网站数据，存入 pred_match + pred_score_matrix 表。
 
-Usage:
+用法:
     python -m scripts.fetch_predictions
     python -m scripts.fetch_predictions --detail
 """
@@ -28,10 +28,10 @@ PRED_BASE = "http://43.137.46.40:8000"
 
 
 def clean_team_name(name: str) -> str:
-    """Strip emoji flags and special Unicode, keep Chinese name."""
-    name = re.sub(r'[\U0001F1E0-\U0001F1FF]', '', name)  # Regional indicators
-    name = re.sub(r'[\U0000FE00-\U0000FE0F]', '', name)   # Variation selectors
-    name = re.sub(r'\U0000200D', '', name)                  # ZWJ
+    """去除 emoji 国旗和特殊 Unicode 字符，保留中文队名。"""
+    name = re.sub(r'[\U0001F1E0-\U0001F1FF]', '', name)  # 区域指示符
+    name = re.sub(r'[\U0000FE00-\U0000FE0F]', '', name)   # 变体选择符
+    name = re.sub(r'\U0000200D', '', name)                  # 零宽连接符
     return name.strip()
 
 DDL_PRED_MATCH = """
@@ -89,7 +89,7 @@ def ensure_pred_tables(conn: db.Connection) -> None:
 
 
 def fetch_homepage() -> str | None:
-    """Fetch the homepage HTML."""
+    """抓取首页 HTML。"""
     try:
         resp = requests.get(PRED_BASE, timeout=15)
         resp.raise_for_status()
@@ -100,7 +100,7 @@ def fetch_homepage() -> str | None:
 
 
 def parse_match_links(html: str) -> list[int]:
-    """Extract match IDs from homepage links."""
+    """从首页链接中提取比赛 ID。"""
     ids = []
     for m in re.finditer(r'href="/match/(\d+)"', html):
         mid = int(m.group(1))
@@ -110,7 +110,7 @@ def parse_match_links(html: str) -> list[int]:
 
 
 def parse_homepage_card(html: str, match_id: int) -> dict | None:
-    """Parse one match card from homepage HTML using BeautifulSoup."""
+    """使用 BeautifulSoup 从首页 HTML 中解析单场比赛卡片。"""
     soup = BeautifulSoup(html, "html.parser")
     card = soup.find("a", href=f"/match/{match_id}")
     if not card:
@@ -118,13 +118,13 @@ def parse_homepage_card(html: str, match_id: int) -> dict | None:
 
     result = {"pred_match_id": match_id}
 
-    # Teams: get text from team spans, ignoring tflag spans
+    # 队伍: 从 team span 中获取文本，忽略 tflag span
     team_spans = card.select(".teams-row .team")
     if len(team_spans) >= 2:
         result["home_team"] = team_spans[0].get_text(strip=True)
         result["away_team"] = team_spans[1].get_text(strip=True)
 
-    # Score (if finished)
+    # 比分（已结束时）
     score_el = card.select_one(".score.final")
     if score_el:
         score_text = score_el.get_text(strip=True).replace(" ", "")
@@ -132,7 +132,7 @@ def parse_homepage_card(html: str, match_id: int) -> dict | None:
         if score_m:
             result["actual_score"] = f"{score_m.group(1)}:{score_m.group(2)}"
 
-    # Top scores
+    # 热门比分
     top_scores = []
     for chip in card.select(".chip"):
         score_el = chip.find(string=re.compile(r'\d+-\d+'))
@@ -143,19 +143,19 @@ def parse_homepage_card(html: str, match_id: int) -> dict | None:
             top_scores.append({"score": score_text, "prob": float(prob_text)})
     result["top_scores_json"] = top_scores
 
-    # Group
+    # 小组
     group_el = card.select_one(".group-tag")
     if group_el:
         result["group_name"] = group_el.get_text(strip=True)
 
-    # City / venue
+    # 城市 / 场地
     city_el = card.select_one(".city")
     if city_el:
         raw = city_el.get_text(strip=True)
         result["is_home_venue"] = 1 if "🏠" in raw else 0
         result["venue"] = re.sub(r'·.*', '', raw).strip()
 
-    # Probability bar
+    # 概率条
     prob_bar = card.select_one(".prob-bar")
     if prob_bar:
         title = prob_bar.get("title", "")
@@ -169,7 +169,7 @@ def parse_homepage_card(html: str, match_id: int) -> dict | None:
 
 
 def fetch_detail(match_id: int) -> str | None:
-    """Fetch a match detail page."""
+    """抓取比赛详情页。"""
     try:
         resp = requests.get(f"{PRED_BASE}/match/{match_id}", timeout=15)
         resp.raise_for_status()
@@ -180,10 +180,10 @@ def fetch_detail(match_id: int) -> str | None:
 
 
 def parse_detail(html: str) -> dict:
-    """Parse detail page for model probabilities and score matrix."""
+    """解析详情页，提取模型概率和比分矩阵。"""
     result = {}
 
-    # Team names from title tag: "墨西哥 vs 捷克 — 2026 世界杯预测"
+    # 从 title 标签获取队名: "墨西哥 vs 捷克 — 2026 世界杯预测"
     title_m = re.search(r'<title>(.*?)</title>', html)
     if title_m:
         title = title_m.group(1)
@@ -192,7 +192,7 @@ def parse_detail(html: str) -> dict:
             result["detail_home"] = clean_team_name(vs_m.group(1).strip())
             result["detail_away"] = clean_team_name(vs_m.group(2).strip())
 
-    # Match date and venue from sub line
+    # 从副标题行获取比赛日期和场地
     sub_m = re.search(r'<p class="sub">(.*?)</p>', html, re.DOTALL)
     if sub_m:
         sub = sub_m.group(1)
@@ -200,7 +200,7 @@ def parse_detail(html: str) -> dict:
         if date_m:
             result["match_date"] = date_m.group(1)
 
-    # Dual model table
+    # 双模型对比表格
     compare_m = re.search(r'<table class="compare">(.*?)</table>', html, re.DOTALL)
     if compare_m:
         rows = re.findall(r'<tr>(.*?)</tr>', compare_m.group(1), re.DOTALL)
@@ -225,7 +225,7 @@ def parse_detail(html: str) -> dict:
                     result["dc_draw_prob"] = d / 100
                     result["dc_away_prob"] = a / 100
 
-    # Over/under and expected goals
+    # 大小球和期望进球
     note_m = re.search(r'<p class="note">(.*?)</p>', html, re.DOTALL)
     if note_m:
         note = note_m.group(1)
@@ -238,7 +238,7 @@ def parse_detail(html: str) -> dict:
             result["expected_goals_home"] = float(goals_m.group(1))
             result["expected_goals_away"] = float(goals_m.group(2))
 
-    # Score matrix
+    # 比分矩阵
     matrix = []
     for cell in re.finditer(r'title="(\d+)-(\d+):\s*([\d.]+)%"', html):
         hg, ag, prob = int(cell.group(1)), int(cell.group(2)), float(cell.group(3)) / 100
@@ -249,10 +249,10 @@ def parse_detail(html: str) -> dict:
 
 
 def save_prediction(conn: db.Connection, data: dict) -> bool:
-    """Save one match prediction. Returns True if inserted."""
+    """保存单场比赛预测。插入成功返回 True。"""
     mid = data["pred_match_id"]
 
-    # Check if already exists
+    # 检查是否已存在
     existing = conn.execute(
         "SELECT id FROM pred_match WHERE pred_match_id = ?", (mid,)
     ).fetchone()
@@ -299,7 +299,7 @@ def save_prediction(conn: db.Connection, data: dict) -> bool:
         ),
     )
 
-    # Score matrix
+    # 比分矩阵
     for cell in data.get("score_matrix", []):
         conn.execute(
             """
@@ -336,20 +336,20 @@ def main():
         errors = 0
 
         for i, mid in enumerate(match_ids, 1):
-            # Parse homepage card
+            # 解析首页卡片
             card = parse_homepage_card(html, mid)
             if not card:
                 print(f"  [{i}/{len(match_ids)}] {mid} 解析失败")
                 errors += 1
                 continue
 
-            # Fetch detail page
+            # 抓取详情页
             detail_html = fetch_detail(mid)
             if detail_html:
                 detail = parse_detail(detail_html)
                 card.update(detail)
 
-            # Detail page has cleaner team names from title tag
+            # 详情页的 title 标签中有更准确的队名
             if detail:
                 if detail.get("detail_home"):
                     card["home_team"] = detail["detail_home"]
@@ -369,7 +369,7 @@ def main():
             else:
                 skipped += 1
 
-            # Rate limit
+            # 频率限制
             if i < len(match_ids):
                 time.sleep(0.2)
 

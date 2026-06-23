@@ -1,7 +1,7 @@
 """
 回测每日建议/纯信号预测：按赛前 SP 快照生成建议或预测，再和实际赛果对比。
 
-Usage:
+用法:
     python -m scripts.backtest_daily_suggestions
     python -m scripts.backtest_daily_suggestions --league 世界杯
     python -m scripts.backtest_daily_suggestions --league 世界杯 --detail
@@ -19,7 +19,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src import db
-from src.recommendation import build_match_recommendation, filter_sp_records_as_of
+from src.recommendation import build_match_recommendation, filter_sp_records_as_of, latest_play_snapshot, latest_option_sp, score_from_crs_code
 
 
 def _evaluate_suggestion(
@@ -83,7 +83,7 @@ def _settle_suggestion(
     goal_line = _latest_goal_line(sp_history, play_type)
     hit, actual = _evaluate_suggestion(play_type, selections, match, goal_line=goal_line)
     selected_sps = {
-        selection: _latest_option_sp(sp_history, play_type, selection)
+        selection: latest_option_sp(sp_history, play_type, selection)
         for selection in selections
     }
     if hit is None or any(sp is None for sp in selected_sps.values()):
@@ -134,7 +134,7 @@ def _settle_single_prediction(
 
     goal_line = _latest_goal_line(sp_history, play_type)
     hit, actual = _evaluate_suggestion(play_type, (selection,), match, goal_line=goal_line)
-    sp_value = _latest_option_sp(sp_history, play_type, selection)
+    sp_value = latest_option_sp(sp_history, play_type, selection)
     if hit is None or sp_value is None:
         return {
             "settleable": False,
@@ -157,23 +157,6 @@ def _settle_single_prediction(
         "hit": hit,
         "actual": actual,
     }
-
-
-def _latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
-    records = [record for record in sp_history if str(record.get("play_type", "")).lower() == play_type]
-    if not records:
-        return []
-    latest_time = max((str(record.get("snapshot_time", "")) for record in records), default="")
-    return [record for record in records if str(record.get("snapshot_time", "")) == latest_time]
-
-
-def _score_from_crs_code(code: str) -> tuple[int, int] | None:
-    if not code.startswith("s") or len(code) != 6 or code.startswith("s-1"):
-        return None
-    try:
-        return int(code[1:3]), int(code[4:6])
-    except ValueError:
-        return None
 
 
 def _half_score(match: dict) -> tuple[int, int] | None:
@@ -211,7 +194,7 @@ def _predict_had(recommendation, sp_history: list[dict]) -> str | None:
     if recommendation.candidates.had_options:
         return recommendation.candidates.had_options[0]
 
-    latest = _latest_play_snapshot(sp_history, "had")
+    latest = latest_play_snapshot(sp_history, "had")
     if latest:
         best = max(
             latest,
@@ -231,7 +214,7 @@ def _predict_had(recommendation, sp_history: list[dict]) -> str | None:
 
 
 def _predict_hafu(sp_history: list[dict]) -> str | None:
-    latest = _latest_play_snapshot(sp_history, "hafu")
+    latest = latest_play_snapshot(sp_history, "hafu")
     if not latest:
         return None
     best = max(
@@ -245,7 +228,7 @@ def _predict_hafu(sp_history: list[dict]) -> str | None:
 
 
 def _predict_half_result(sp_history: list[dict]) -> str | None:
-    latest = _latest_play_snapshot(sp_history, "hafu")
+    latest = latest_play_snapshot(sp_history, "hafu")
     if not latest:
         return None
     buckets = {"H": 0.0, "D": 0.0, "A": 0.0}
@@ -264,7 +247,7 @@ def _predict_crs(recommendation, sp_history: list[dict], had_pred: str | None, t
     if recommendation.candidates.crs_options:
         return recommendation.candidates.crs_options[0]
 
-    latest = _latest_play_snapshot(sp_history, "crs")
+    latest = latest_play_snapshot(sp_history, "crs")
     if not latest or (had_pred is None and ttg_pred is None):
         return None
 
@@ -272,7 +255,7 @@ def _predict_crs(recommendation, sp_history: list[dict], had_pred: str | None, t
     ranked = sorted(latest, key=lambda row: -(row.get("implied_prob_norm") or 0))
     for row in ranked:
         code = str(row.get("option_code", ""))
-        score = _score_from_crs_code(code)
+        score = score_from_crs_code(code)
         if score is None:
             continue
         home_goals, away_goals = score
@@ -295,7 +278,7 @@ def _build_forced_predictions(
 ) -> dict[str, str | None]:
     had_pred = _predict_had(recommendation, sp_history)
     if exclude_high_sp_away and had_pred == "A":
-        had_sp = _latest_option_sp(sp_history, "had", had_pred)
+        had_sp = latest_option_sp(sp_history, "had", had_pred)
         if had_sp is not None and had_sp >= 1.60:
             had_pred = None
     ttg_interval = _build_ttg_interval(recommendation, sp_history)
@@ -322,7 +305,7 @@ def _build_ttg_interval(recommendation, sp_history: list[dict]) -> tuple[str, ..
     if recommendation.candidates.ttg_options:
         return recommendation.candidates.ttg_options
 
-    latest = _latest_play_snapshot(sp_history, "ttg")
+    latest = latest_play_snapshot(sp_history, "ttg")
     if not latest:
         return ()
 
@@ -336,21 +319,8 @@ def _build_ttg_interval(recommendation, sp_history: list[dict]) -> tuple[str, ..
     return tuple(str(row.get("option_code")) for row in ranked[:2])
 
 
-def _latest_option_sp(sp_history: list[dict], play_type: str, option_code: str) -> float | None:
-    latest = _latest_play_snapshot(sp_history, play_type)
-    if not latest:
-        return None
-    for row in latest:
-        if str(row.get("option_code")) == option_code:
-            try:
-                return float(row.get("sp_value"))
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
 def _latest_goal_line(sp_history: list[dict], play_type: str) -> str | None:
-    latest = _latest_play_snapshot(sp_history, play_type)
+    latest = latest_play_snapshot(sp_history, play_type)
     if not latest:
         return None
     for row in latest:
@@ -405,8 +375,8 @@ def run_backtest(conn, *, league: str | None = None, mode: str = "signal", unit_
         recommendation = build_match_recommendation(match, prematch_history, window="open_to_latest", now_time=match.get("match_time"))
         had_snapshot_count = _play_snapshot_count(prematch_history, "had")
         ttg_snapshot_count = _play_snapshot_count(prematch_history, "ttg")
-        crs_available = bool(_latest_play_snapshot(prematch_history, "crs"))
-        hafu_available = bool(_latest_play_snapshot(prematch_history, "hafu")) and bool(match.get("half_score"))
+        crs_available = bool(latest_play_snapshot(prematch_history, "crs"))
+        hafu_available = bool(latest_play_snapshot(prematch_history, "hafu")) and bool(match.get("half_score"))
         signal_ready = {
             "had": had_snapshot_count >= 2,
             "ttg": ttg_snapshot_count >= 2,

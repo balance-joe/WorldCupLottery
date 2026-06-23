@@ -1,20 +1,18 @@
-"""Structured SP trend analysis for Sporttery football markets.
+"""体彩竞彩足球市场的结构化 SP 趋势分析。
 
-SP is the China Sporttery fixed-prize value. The normalized weights produced
-here are market-expression weights within one play type, not true
-probabilities and not model predictions.
+SP 是中国体彩的固定奖金值。此处生成的归一化权重是单一玩法内的
+市场表达权重，不是真实概率，也不是模型预测。
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 
 SUPPORTED_PLAY_TYPES = {"had", "hhad", "ttg"}
-WINDOWS = ("open_to_latest", "last_24h", "last_6h")
-CHINA_TZ = timezone(timedelta(hours=8))
+from src.constants import CHINA_TZ, WINDOWS, parse_time as _parse_time
 
 TREND_CONFIG = {
     "sp_strong_down_pct": -0.08,
@@ -88,7 +86,7 @@ def analyze_play_trend(
     window: str,
     sp_records: list[dict],
 ) -> PlayTrend:
-    """Analyze one match/play/window trend from stored SP snapshots."""
+    """根据已存储的 SP 快照分析单场比赛/玩法/时间窗口的趋势。"""
     match_id = str(match_id)
     play_type = play_type.lower()
     if play_type not in SUPPORTED_PLAY_TYPES:
@@ -171,6 +169,7 @@ def _select_window_snapshots(
 ) -> tuple[datetime, list[dict], datetime, list[dict]] | None:
     if len(snapshots) < 2:
         return None
+    # 开盘到最新
     if window == "open_to_latest":
         start_time, start_rows = snapshots[0]
         end_time, end_rows = snapshots[-1]
@@ -179,11 +178,13 @@ def _select_window_snapshots(
     end_time, end_rows = snapshots[-1]
     window_duration = WINDOW_DURATIONS[window]
     cutoff = end_time - window_duration
+    # 窗口内的快照
     inside_window = [(t, rows) for t, rows in snapshots if t >= cutoff]
     if len(inside_window) >= 2:
         start_time, start_rows = inside_window[0]
         return start_time, start_rows, end_time, end_rows
 
+    # 窗口边界附近的候选快照
     boundary_candidates = [
         (t, rows)
         for t, rows in snapshots
@@ -289,17 +290,23 @@ def _had_direction(options: list[TrendOption], gap: float, confidence: str) -> t
         return "no_clear_direction", "none"
     strengthening = {code for code, trend in trends.items() if trend == "strengthening"}
     weakening = {code for code, trend in trends.items() if trend == "weakening"}
+    # 主胜+平增强且客胜走弱 → 主场不败强化
     if {"H", "D"} <= strengthening and "A" in weakening:
         return "home_unbeaten_strengthening", confidence
+    # 平+客胜增强且主胜走弱 → 客场不败强化
     if {"D", "A"} <= strengthening and "H" in weakening:
         return "away_unbeaten_strengthening", confidence
     if confidence != "none":
+        # 主胜增强且平+客胜走弱 → 主胜强化
         if trends.get("H") == "strengthening" and {"D", "A"} <= weakening:
             return "home_win_strengthening", confidence
+        # 平增强且主胜+客胜走弱 → 平局强化
         if trends.get("D") == "strengthening" and {"H", "A"} <= weakening:
             return "draw_strengthening", confidence
+        # 客胜增强且主胜+平走弱 → 客胜强化
         if trends.get("A") == "strengthening" and {"H", "D"} <= weakening:
             return "away_win_strengthening", confidence
+    # 多方向增强且差距不明显 → 混合方向
     if len(strengthening) >= 2 and gap < TREND_CONFIG["mixed_gap_threshold"]:
         return "mixed_direction", confidence
     top_code = max(deltas, key=deltas.get)
@@ -315,6 +322,7 @@ def _hhad_direction(options: list[TrendOption], gap: float, confidence: str) -> 
     if _no_clear(options, gap):
         return "no_clear_direction", "none"
     strengthening = [option for option in options if option.weight_trend == "strengthening"]
+    # 多方向增强且差距不明显 → 混合方向
     if len(strengthening) >= 2 and gap < TREND_CONFIG["mixed_gap_threshold"]:
         return "mixed_direction", confidence
     top = max(options, key=lambda option: option.normalized_weight_delta)
@@ -329,9 +337,9 @@ def _hhad_direction(options: list[TrendOption], gap: float, confidence: str) -> 
 
 def _ttg_direction(options: list[TrendOption]) -> tuple[str, str, float, dict[str, float]]:
     deltas = {option.option_code: option.normalized_weight_delta for option in options}
-    # Note: "2" is intentionally shared between low_goals and mid_goals —
-    # it sits on the boundary and its weight shift contributes to both groups,
-    # making the analysis more sensitive to marginal moves around 2 goals.
+    # 注意："2" 在低进球组和中间进球组之间有意共享——
+    # 它处于边界位置，其权重变化同时贡献到两组，
+    # 使分析对 2 球附近的边际变化更敏感。
     groups = {
         "low_goals": sum(deltas.get(code, 0.0) for code in ("0", "1", "2")),
         "mid_goals": sum(deltas.get(code, 0.0) for code in ("2", "3")),
@@ -342,8 +350,10 @@ def _ttg_direction(options: list[TrendOption]) -> tuple[str, str, float, dict[st
     top_group, top_delta = ordered[0]
     gap = round(ordered[0][1] - ordered[1][1], 4)
     confidence = _direction_confidence(gap)
+    # 最强方向未达到增强阈值 → 无明确进球方向
     if top_delta < TREND_CONFIG["goal_group_strengthen_delta"]:
         return "no_clear_goal_direction", "none", gap, groups
+    # 组间差距不明显 → 分散的进球结构
     if gap < TREND_CONFIG["goal_group_gap_threshold"]:
         return "scattered_goal_structure", confidence, gap, groups
     direction = {
@@ -387,22 +397,6 @@ def _safe_sp(value) -> float | None:
     if sp <= 0:
         return None
     return sp
-
-
-def _parse_time(value) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=CHINA_TZ)
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.replace("T", " ")
-    if text.endswith("+08:00"):
-        text = text[:-6]
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            return datetime.strptime(text, fmt).replace(tzinfo=CHINA_TZ)
-        except ValueError:
-            continue
-    return None
 
 
 def _iso(value: datetime) -> str:

@@ -1,4 +1,4 @@
-"""Sporttery API client. Returns raw JSON dicts."""
+"""竞彩 API 客户端，返回原始 JSON 字典。"""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ from src.config import (
     API_TEAM_POOLDIV_STATS,
 )
 
-# Retry defaults
+# 重试默认参数
 _MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0  # seconds; doubles each retry: 1s, 2s, 4s
+_BACKOFF_BASE = 1.0  # 秒；每次重试翻倍：1s、2s、4s
 
 DETAIL_APIS = {
     "matchHead": API_MATCH_HEAD,
@@ -48,12 +48,10 @@ def _get(
     *,
     max_retries: int = _MAX_RETRIES,
 ) -> tuple[dict | None, str | None]:
-    """GET request with exponential-backoff retry. Return (data, error_msg).
+    """带指数退避重试的 GET 请求。返回 (data, error_msg)。
 
-    On transient failures (network / HTTP 5xx / timeout) retries up to
-    *max_retries* times with exponential backoff before giving up.
-    Non-retryable errors (HTTP 4xx, API-level ``success=false``) fail
-    immediately.
+    遇到瞬时故障（网络异常 / HTTP 5xx / 超时）时，最多重试 *max_retries* 次，
+    每次间隔指数递增。不可重试的错误（HTTP 4xx、API 层 success=false）立即失败。
     """
     last_err: str | None = None
     for attempt in range(max_retries):
@@ -64,7 +62,7 @@ def _get(
                 headers=SPORTTERY_HEADERS,
                 timeout=REQUEST_TIMEOUT,
             )
-            # Retry on 5xx server errors
+            # 遇到 5xx 服务端错误时重试
             if resp.status_code >= 500:
                 last_err = f"HTTP {resp.status_code}"
                 if attempt < max_retries - 1:
@@ -83,12 +81,12 @@ def _get(
         except requests.Timeout as e:
             last_err = f"Timeout: {e}"
         except requests.HTTPError as e:
-            # 4xx — non-transient, fail immediately
+            # 4xx —— 非瞬时错误，立即失败
             return None, str(e)
         except requests.RequestException as e:
             return None, str(e)
         except ValueError as e:
-            # JSONDecodeError — malformed response body
+            # JSONDecodeError —— 响应体格式错误
             return None, f"JSON decode error: {e}"
 
         if attempt < max_retries - 1:
@@ -98,12 +96,12 @@ def _get(
 
 
 def fetch_match_list() -> tuple[dict | None, str | None]:
-    """Fetch the 'concern' match list (关注赛事)."""
+    """获取关注赛事列表。"""
     return _get(API_MATCH_LIST, params={"method": "concern"})
 
 
 def fetch_fixed_bonus(match_id: str | int) -> tuple[dict | None, str | None]:
-    """Fetch full SP odds for a single match."""
+    """获取单场比赛的完整 SP 固定奖金。"""
     return _get(API_FIXED_BONUS, params={"clientCode": "3001", "matchId": str(match_id)})
 
 
@@ -113,7 +111,7 @@ def fetch_result_list(
     page_no: int | None = None,
     match_date: str | None = None,
 ) -> tuple[dict | None, str | None]:
-    """Fetch result list from the football data result tab."""
+    """从足球数据结果页获取赛果列表。"""
     params = {"method": "result", "pageSize": str(page_size)}
     if page_no is not None:
         params["pageNo"] = str(page_no)
@@ -128,7 +126,7 @@ def fetch_detail_api(
     *,
     extra_params: dict | None = None,
 ) -> tuple[dict | None, str | None]:
-    """Fetch one football detail endpoint by source name."""
+    """根据 source_name 获取一个足球详情接口。"""
     url = DETAIL_APIS.get(source_name)
     if not url:
         return None, f"unsupported detail api: {source_name}"
@@ -143,9 +141,9 @@ def fetch_match_detail_bundle(
     *,
     sources: tuple[str, ...] | list[str] | None = None,
 ) -> tuple[dict[str, dict], dict[str, str]]:
-    """Fetch a bundle of football detail endpoints.
+    """批量获取多个足球详情接口。
 
-    Returns `(payloads, errors)`.
+    返回 `(payloads, errors)`。
     """
     selected = tuple(sources) if sources else tuple(DETAIL_APIS.keys())
     payloads: dict[str, dict] = {}

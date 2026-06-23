@@ -1,11 +1,12 @@
-"""Build stable LLM input packages from structured market analysis."""
+"""从结构化市场分析构建稳定的LLM输入包。"""
 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
+from src.constants import CHINA_TZ, WINDOWS
 from src.market_structure import MarketStructure, PRIORITY_RANK
 
 
@@ -14,8 +15,10 @@ LLM_INSTRUCTION = (
     "不要使用海外赔率逻辑。不要使用稳胆、必买、稳赚、模型预测等表达。"
 )
 
-FORBIDDEN_OUTPUT_TERMS = ["必胜", "稳赚", "稳胆", "真实胜率", "模型预测概率", "建议下注"]
-CHINA_TZ = timezone(timedelta(hours=8))
+FORBIDDEN_OUTPUT_TERMS = [
+    "必胜", "稳赚", "稳胆", "真实胜率", "模型预测概率", "建议下注",
+    "保证赢", "包赢", "必赢",
+]
 
 
 def build_agent_report_package(
@@ -27,7 +30,7 @@ def build_agent_report_package(
     sp_research_priority: str | None = None,
     non_sp_blend_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build compact default input for LLM market-expression explanation."""
+    """构建LLM市场表达解释的紧凑默认输入。"""
     window_summaries = {}
     market_structure_summary = {}
     for window, structure in window_structures.items():
@@ -70,7 +73,7 @@ def build_agent_report_package(
 def build_cross_window_summary(window_structures: dict[str, MarketStructure]) -> dict[str, str]:
     long_term = window_structures.get("open_to_latest")
     recent = window_structures.get("last_6h")
-    medium = window_structures.get("last_6h") or window_structures.get("last_24h")
+    medium = window_structures.get("last_24h") or window_structures.get("last_6h")
 
     long_text = _direction_text(long_term, "开售至今")
     recent_text = _direction_text(recent, "临场")
@@ -88,7 +91,7 @@ def build_cross_window_summary(window_structures: dict[str, MarketStructure]) ->
 
     return {
         "long_term_direction": long_text,
-        "mid_term_direction": _direction_text(medium, "最近6小时"),
+        "mid_term_direction": _direction_text(medium, "最近24小时"),
         "recent_change": recent_text,
         "tempo_reading": tempo,
     }
@@ -102,7 +105,7 @@ def final_research_priority(window_structures: dict[str, MarketStructure]) -> st
 
 
 def validate_llm_output_json(data: dict[str, Any] | str) -> list[str]:
-    """Validate downstream LLM output shape, banned phrases, and JSON parsing."""
+    """验证下游LLM输出结构、禁用短语和JSON解析。"""
     if isinstance(data, str):
         try:
             data = json.loads(data)
@@ -153,7 +156,7 @@ def _same_expression(left: MarketStructure, right: MarketStructure) -> bool:
 
 
 def _first_handicap_line(window_structures: dict[str, MarketStructure]) -> str | None:
-    for window in ("open_to_latest", "last_24h", "last_6h"):
+    for window in WINDOWS:
         structure = window_structures.get(window)
         if structure and structure.handicap_line is not None:
             return structure.handicap_line

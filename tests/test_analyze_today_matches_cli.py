@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from scripts.analyze_today_matches import _main_pick
+from scripts.analyze_today_matches import _main_result_pick
 from scripts.backtest_daily_suggestions import _evaluate_suggestion, _predict_crs, _settle_single_prediction, _settle_suggestion
 
 
@@ -43,12 +43,16 @@ class AnalyzeTodayMatchesCliShapeTest(unittest.TestCase):
     def test_main_pick_requires_single_had_option(self):
         recommendation = _recommendation(("H", "D"), {"H": 1.45, "D": 3.8})
 
-        self.assertIsNone(_main_pick(recommendation))
+        play_type, pick = _main_result_pick(recommendation)
+        self.assertIsNone(play_type)
+        self.assertIsNone(pick)
 
     def test_high_sp_away_is_not_main_pick(self):
         recommendation = _recommendation(("A",), {"A": 2.2})
 
-        self.assertIsNone(_main_pick(recommendation))
+        play_type, pick = _main_result_pick(recommendation)
+        self.assertIsNone(play_type)
+        self.assertIsNone(pick)
 
     def test_crs_prediction_does_not_fallback_when_constraints_miss(self):
         recommendation = SimpleNamespace(candidates=SimpleNamespace(crs_options=()))

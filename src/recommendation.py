@@ -1,18 +1,15 @@
-"""Recommendation gates and candidate generation for Sporttery picks."""
+"""竞彩推荐门控与候选生成模块。"""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
+from src.constants import CHINA_TZ, parse_time as _parse_time
 from src.market_structure import MarketStructure, analyze_market_structure
 from src.sp_trend import PlayTrend, analyze_play_trend
-
-
-CHINA_TZ = timezone(timedelta(hours=8))
-# Gate settings are intentionally conservative: they should block weak or stale
-# markets before any ticket construction logic runs.
+# 门控设置有意偏保守：在票单构建逻辑运行前，应先屏蔽弱势或过时的市场。
 PLAY_SNAPSHOT_LIMITS = {
     "had": 2,
     "hhad": 2,
@@ -83,7 +80,7 @@ class MatchRecommendation:
 
 
 def filter_sp_records_as_of(sp_records: list[dict], cutoff_time: str | None) -> list[dict]:
-    """Return records whose snapshot_time is not later than the cutoff."""
+    """返回快照时间不晚于截止时间的记录。"""
     cutoff = _parse_time(cutoff_time)
     if cutoff is None:
         return list(sp_records)
@@ -102,7 +99,7 @@ def build_match_recommendation(
     window: str = "open_to_latest",
     now_time: str | None = None,
 ) -> MatchRecommendation:
-    """Analyze one match and return a gated recommendation payload."""
+    """分析单场比赛，返回带门控的推荐结果。"""
     match_id = str(match_info.get("match_id", ""))
     had = analyze_play_trend(match_id, "had", window, sp_history)
     hhad = analyze_play_trend(match_id, "hhad", window, sp_history)
@@ -263,7 +260,7 @@ def _hhad_candidates(hhad: PlayTrend) -> list[str]:
 def _ttg_candidates(sp_history: list[dict], ttg: PlayTrend) -> list[str]:
     if not ttg.available:
         return []
-    latest = _latest_play_snapshot(sp_history, "ttg")
+    latest = latest_play_snapshot(sp_history, "ttg")
     if not latest:
         return []
     groups = {
@@ -287,13 +284,13 @@ def _crs_candidates(
     had_options: list[str],
     ttg_options: list[str],
 ) -> list[str]:
-    latest = _latest_play_snapshot(sp_history, "crs")
+    latest = latest_play_snapshot(sp_history, "crs")
     if not latest:
         return []
     allowed_totals = {int(option) for option in ttg_options if str(option).isdigit()}
     scored = []
     for row in latest:
-        score = _score_from_crs_code(str(row.get("option_code", "")))
+        score = score_from_crs_code(str(row.get("option_code", "")))
         if score is None:
             continue
         home_goals, away_goals = score
@@ -401,7 +398,8 @@ def _snapshot_counts(sp_history: list[dict]) -> dict[str, int]:
     return {play_type: len(times) for play_type, times in counts.items()}
 
 
-def _latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
+def latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
+    """返回指定玩法在最新快照时间的全部记录。"""
     records = [record for record in sp_history if str(record.get("play_type", "")).lower() == play_type]
     if not records:
         return []
@@ -412,26 +410,24 @@ def _latest_play_snapshot(sp_history: list[dict], play_type: str) -> list[dict]:
     return [record for record in records if str(record.get("snapshot_time", "")) == latest_time]
 
 
-def _score_from_crs_code(code: str) -> tuple[int, int] | None:
+def latest_option_sp(sp_history: list[dict], play_type: str, option_code: str | None) -> float | None:
+    """返回指定玩法/选项在最新快照中的 SP 值，未找到返回 None。"""
+    if not option_code:
+        return None
+    records = latest_play_snapshot(sp_history, play_type)
+    for record in records:
+        if str(record.get("option_code", "")) == option_code:
+            sp = record.get("sp_value")
+            if sp is not None:
+                return float(sp)
+    return None
+
+
+def score_from_crs_code(code: str) -> tuple[int, int] | None:
+    """从 CRS option_code（如 's02s01'）解析比分，返回 (主, 客) 或 None。"""
     if not code.startswith("s") or len(code) != 6 or code.startswith("s-1"):
         return None
     try:
         return int(code[1:3]), int(code[4:6])
     except ValueError:
         return None
-
-
-def _parse_time(value) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=CHINA_TZ)
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.replace("T", " ")
-    if text.endswith("+08:00"):
-        text = text[:-6]
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            return datetime.strptime(text, fmt).replace(tzinfo=CHINA_TZ)
-        except ValueError:
-            continue
-    return None

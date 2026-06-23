@@ -73,6 +73,55 @@ class SettlementRulesTest(unittest.TestCase):
         )
         self.assertEqual((status, actual), ("unsupported", "missing_half_score"))
 
+    def test_crs_other_home_win_high_score(self):
+        """Home wins 7:3 — should map to 'other' (s-1sh)."""
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s-1sh"},
+            {"home_score_90": 7, "away_score_90": 3},
+        )
+        self.assertEqual((status, actual), ("hit", "s-1sh"))
+
+    def test_crs_other_away_win_high_score(self):
+        """Away wins 2:5 — should map to 'other' (s-1sa)."""
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s-1sa"},
+            {"home_score_90": 2, "away_score_90": 5},
+        )
+        self.assertEqual((status, actual), ("hit", "s-1sa"))
+
+    def test_crs_other_draw_high_score(self):
+        """Draw 5:5 — should map to 'other' (s-1sd)."""
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s-1sd"},
+            {"home_score_90": 5, "away_score_90": 5},
+        )
+        self.assertEqual((status, actual), ("hit", "s-1sd"))
+
+    def test_crs_other_miss_when_bet_on_specific_score(self):
+        """7:3 is 'other', but bet was on specific s07s03 — should miss."""
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s07s03"},
+            {"home_score_90": 7, "away_score_90": 3},
+        )
+        self.assertEqual(status, "miss")
+        self.assertEqual(actual, "s-1sh")
+
+    def test_crs_total_seven_maps_to_other(self):
+        """4:3 total=7 — should map to 'other'."""
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s-1sh"},
+            {"home_score_90": 4, "away_score_90": 3},
+        )
+        self.assertEqual((status, actual), ("hit", "s-1sh"))
+
+    def test_crs_zero_zero(self):
+        """0:0 is a standard CRS code."""
+        status, actual = evaluate_leg(
+            {"play_type": "crs", "option_code": "s00s00"},
+            {"home_score_90": 0, "away_score_90": 0},
+        )
+        self.assertEqual((status, actual), ("hit", "s00s00"))
+
 
 class _DBTestBase(unittest.TestCase):
     def setUp(self):

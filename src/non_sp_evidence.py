@@ -1,4 +1,4 @@
-"""Build non-SP evidence summaries from Sporttery match detail APIs."""
+"""从竞彩比赛详情接口构建非 SP 证据摘要。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any
 
 
 def build_non_sp_evidence(detail_bundle: dict[str, dict]) -> dict[str, Any]:
-    """Convert raw detail API payloads into a compact, LLM-friendly evidence pack."""
+    """将原始详情接口数据转换为紧凑的、适用于大语言模型的证据包。"""
     team_form = _build_team_form(detail_bundle)
     historical = _build_historical(detail_bundle)
     tables = _build_tables(detail_bundle)
@@ -397,7 +397,7 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _pct_value(value: Any) -> float:
-    """Parse a percentage string (e.g. '60' or '60%') and clamp to [0, 100]."""
+    """解析百分比字符串（如 '60' 或 '60%'），并限制在 [0, 100] 范围内。"""
     text = str(value).strip().replace("%", "")
     try:
         v = float(text)

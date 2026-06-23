@@ -1,4 +1,4 @@
-"""Calculate implied probabilities from SP values."""
+"""根据 SP 值计算隐含概率。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ from collections import defaultdict
 
 def calc_implied_prob(records: list[dict]) -> list[dict]:
     """
-    Calculate implied probability for each SP record.
+    计算每条 SP 记录的隐含概率。
 
-    Groups by (match_id, play_type, snapshot_time), then for each group:
+    按 (match_id, play_type, snapshot_time) 分组，对每组执行：
         implied_prob_raw  = 1 / sp_value
         prob_sum          = sum(implied_prob_raw)
         implied_prob_norm = implied_prob_raw / prob_sum
 
-    Modifies records in-place and returns the same list.
+    直接修改原列表并返回。
     """
     groups: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for r in records:

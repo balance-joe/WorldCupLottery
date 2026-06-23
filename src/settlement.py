@@ -1,4 +1,4 @@
-"""Settlement helpers for recorded manual Sporttery tickets."""
+"""已记录手动竞彩票单的结算辅助模块。"""
 
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ class TicketSettlement:
 
 
 def evaluate_leg(selection: dict, match: dict) -> tuple[str, str]:
-    """Return (status, actual_result) for one betting leg.
+    """返回单个投注关的（状态, 实际结果）。
 
-    Result status is one of: hit, miss, pending, unsupported.
+    结果状态为以下之一：hit（命中）、miss（未中）、pending（待定）、unsupported（不支持）。
     """
     home = match.get("home_score_90")
     away = match.get("away_score_90")
@@ -70,7 +70,7 @@ def evaluate_leg(selection: dict, match: dict) -> tuple[str, str]:
 
 
 def settle_pending_tickets(conn: db.Connection, *, bet_group: str | None = None) -> list[TicketSettlement]:
-    """Settle pending tickets whose legs all have final match results."""
+    """结算所有关卡已有最终比赛结果的待结算票单。"""
     tickets = _fetch_pending_tickets(conn, bet_group)
     settlements: list[TicketSettlement] = []
     for ticket in tickets:
@@ -125,12 +125,22 @@ def settle_pending_tickets(conn: db.Connection, *, bet_group: str | None = None)
 
 
 def _crs_code(home_score: int, away_score: int) -> str:
-    """Build CRS option_code from scores, e.g. (2, 1) -> 's02s01'."""
+    """根据比分构建 CRS option_code，例如 (2, 1) -> 's02s01'。
+
+    超出单独列出的 CRS 矩阵范围的比分（每队 < 5 且总进球 < 7）
+    映射到对应的"其他"代码：s-1sh（主胜其他）、s-1sd（平其他）、s-1sa（客胜其他）。
+    """
+    if home_score >= 5 or away_score >= 5 or (home_score + away_score) >= 7:
+        if home_score > away_score:
+            return "s-1sh"
+        if home_score < away_score:
+            return "s-1sa"
+        return "s-1sd"
     return f"s{home_score:02d}s{away_score:02d}"
 
 
 def _hafu_code(half_score: str | None, home_score: int, away_score: int) -> str | None:
-    """Build HAFU option_code from half and full scores, e.g. '1:0', 2, 1 -> 'hh'."""
+    """根据半场和全场比分构建 HAFU option_code，例如 '1:0', 2, 1 -> 'hh'。"""
     if not half_score or ":" not in half_score:
         return None
     try:
@@ -153,8 +163,8 @@ def _had_result(home_score: int, away_score: int) -> str:
 
 def _hhad_result(home_score: int, away_score: int, goal_line: str) -> str:
     adjusted_home = home_score + float(goal_line)
-    # Compare as floats; when adjusted is a half-goal (e.g. 1.5), it can never
-    # equal away_score (int), so the result is always H or A, never D.
+    # 以浮点数比较；当调整后为半球（如 1.5）时，永远不会等于整数的 away_score，
+    # 因此结果只能是 H 或 A，不会出现 D。
     if adjusted_home > away_score:
         return "H"
     if adjusted_home < away_score:
@@ -215,5 +225,5 @@ def _update_selection(conn: db.Connection, leg: LegSettlement) -> None:
 
 
 def _fetch_dicts(cur) -> list[dict]:
-    cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    """委托给 db._fetch_dicts 实现一致的游标到字典转换。"""
+    return db._fetch_dicts(cur)

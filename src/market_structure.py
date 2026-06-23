@@ -1,4 +1,4 @@
-"""Cross-play market structure analysis for Sporttery SP trends."""
+"""跨玩法的市场结构分析，基于体彩 SP 趋势。"""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def analyze_market_structure(
     hhad_trend: PlayTrend | None,
     ttg_trend: PlayTrend | None,
 ) -> MarketStructure:
-    """Merge same-window had/hhad/ttg trends into one market expression."""
+    """将同一时间窗口的 had/hhad/ttg 趋势合并为一个市场表达。"""
     _validate_window(window, had_trend, hhad_trend, ttg_trend)
     available_trends = [trend for trend in (had_trend, hhad_trend, ttg_trend) if trend and trend.available]
     had_dir = _direction(had_trend)
@@ -226,7 +226,7 @@ def _home_small_win(had: PlayTrend | None, hhad: PlayTrend | None, ttg: PlayTren
         return True
     if _direction(hhad) == "no_clear_direction" and _direction(ttg) in {"low_goal_strengthening", "mid_goal_strengthening"}:
         return True
-    # Guard: don't determine structure from a single play type alone
+    # 保护措施：不要仅从单一玩法判断结构
     available_count = sum(1 for t in (had, hhad, ttg) if t and t.available)
     if (hhad is None or not hhad.available) and available_count >= 2 and _direction(ttg) in {"low_goal_strengthening", "mid_goal_strengthening"}:
         return True
@@ -303,7 +303,7 @@ def _research_priority(
         return "A"
     if expression in {"home_small_win_supported", "away_not_lose_or_small_win_supported"}:
         base = "B" if medium_conflicts else "A"
-        # Downgrade if hhad is missing — key confirmation absent
+        # 若让球数据缺失则降级——关键确认信息不足
         if expression == "home_small_win_supported" and (hhad is None or not hhad.available):
             base = "B" if base == "A" else "C"
         return base
